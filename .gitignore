@@ -1,0 +1,7 @@
+.env
+.tmp/
+.pixi/
+.pixi-cache/
+__pycache__/
+*.pyc
+data/state.json

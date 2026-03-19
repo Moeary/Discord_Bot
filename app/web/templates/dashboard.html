@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DC 娱乐机器人控制台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">DC Bot Dashboard</p>
+        <h1>Discord 娱乐机器人控制台</h1>
+        <p class="lead">看状态、改配置、测 AI、盯着谁还没交屎税。</p>
+      </div>
+      <button id="refreshButton" class="button">刷新</button>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>运行状态</h2>
+        <pre id="healthBox">加载中...</pre>
+      </article>
+
+      <article class="card">
+        <h2>全局设置</h2>
+        <form id="globalForm" class="form"></form>
+      </article>
+
+      <article class="card">
+        <div class="row">
+          <h2>服务器设置</h2>
+          <label>
+            Guild ID
+            <input id="guildIdInput" type="number" placeholder="输入 guild id" />
+          </label>
+        </div>
+        <form id="guildForm" class="form"></form>
+      </article>
+
+      <article class="card">
+        <h2>AI 沙盒</h2>
+        <textarea id="aiPrompt" rows="5" placeholder="输入一句话试试 OpenRouter"></textarea>
+        <div class="row">
+          <button id="aiChatButton" class="button" type="button">测试聊天</button>
+          <button id="aiSummaryButton" class="button ghost" type="button">测试总结</button>
+        </div>
+        <pre id="aiOutput">等待输入...</pre>
+      </article>
+
+      <article class="card wide">
+        <h2>挂起的屎税</h2>
+        <pre id="taxBox">加载中...</pre>
+      </article>
+
+      <article class="card wide">
+        <h2>命令与可调项</h2>
+        <div id="commandBox" class="tableWrap"></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
