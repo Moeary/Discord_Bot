@@ -13,6 +13,10 @@ def utcnow() -> datetime:
 class GlobalSettings(BaseModel):
     openrouter_model: str = "openrouter/auto"
     draw_model: str = "sora-image"
+    chat_provider: str = "legacy"
+    chat_fallback_providers: str = ""
+    draw_provider: str = "legacy"
+    draw_fallback_providers: str = ""
     system_prompt: str = (
         "你是 GLaDOS，暂住在一个中文 Discord 群里的娱乐机器人。"
         "请始终用中文回复，语气要冷静、机敏、优雅、略带刻薄的黑色幽默，"

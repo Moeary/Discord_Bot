@@ -25,9 +25,11 @@ async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
         reply = await request.app.state.openrouter.chat(
             messages,
             model=payload.model or global_settings.openrouter_model,
+            provider=payload.provider or global_settings.chat_provider,
+            fallback_providers=payload.fallback_providers or global_settings.chat_fallback_providers,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
     return {"reply": reply}
 
 
@@ -43,9 +45,11 @@ async def summary(request: Request, payload: SummaryRequest) -> dict[str, str]:
             global_settings.summary_system_prompt,
             text,
             model=payload.model or global_settings.openrouter_model,
+            provider=payload.provider or global_settings.chat_provider,
+            fallback_providers=payload.fallback_providers or global_settings.chat_fallback_providers,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
     return {"summary": reply}
 
 
@@ -58,6 +62,8 @@ async def draw(request: Request, payload: DrawRequest) -> dict[str, object]:
         result = await request.app.state.openrouter.draw(
             prompt=payload.prompt,
             model=draw_model,
+            provider=payload.provider or global_settings.draw_provider,
+            fallback_providers=payload.fallback_providers or global_settings.draw_fallback_providers,
             size=payload.size,
             variants=payload.variants,
             urls=payload.urls,
@@ -65,14 +71,19 @@ async def draw(request: Request, payload: DrawRequest) -> dict[str, object]:
             shut_progress=payload.shut_progress,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
     return {"result": result}
 
 
 @router.post("/draw/result")
 async def draw_result(request: Request, payload: DrawResultRequest) -> dict[str, object]:
     try:
-        result = await request.app.state.openrouter.draw_result(payload.id)
+        result = await request.app.state.openrouter.draw_result(payload.id, provider=payload.provider)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
     return {"result": result}
+
+
+def _describe_error(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__

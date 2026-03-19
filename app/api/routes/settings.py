@@ -17,6 +17,7 @@ async def dashboard(request: Request, guild_id: int | None = Query(default=None)
     return {
         "health": await request.app.state.health_provider(request),
         "catalog": get_setting_catalog(),
+        "providers": request.app.state.openrouter.list_providers(),
         "global_settings": snapshot.global_settings.model_dump(),
         "guilds": {
             guild_key: guild_settings.model_dump()

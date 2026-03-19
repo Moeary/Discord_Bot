@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from app.core.catalog import GUILD_SETTING_SPECS, cast_setting_value
+from app.core.catalog import GLOBAL_SETTING_SPECS, GUILD_SETTING_SPECS, cast_setting_value
 from app.core.config import EnvSettings
 from app.models.state import GuildSettings, TaxCase, utcnow
 from app.services.danbooru import DanbooruClient
@@ -119,9 +119,11 @@ class EntertainmentBot(commands.Bot):
                 reply = await self.openrouter.chat(
                     messages,
                     model=global_settings.openrouter_model,
+                    provider=global_settings.chat_provider,
+                    fallback_providers=global_settings.chat_fallback_providers,
                 )
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"AI 调用失败：{exc}")
+                await interaction.followup.send(f"AI 调用失败：{self._describe_error(exc)}")
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "ai_calls")
@@ -154,9 +156,11 @@ class EntertainmentBot(commands.Bot):
                     self._compose_ai_system_prompt(global_settings.summary_system_prompt),
                     transcript,
                     model=global_settings.openrouter_model,
+                    provider=global_settings.chat_provider,
+                    fallback_providers=global_settings.chat_fallback_providers,
                 )
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"AI 总结失败：{exc}")
+                await interaction.followup.send(f"AI 总结失败：{self._describe_error(exc)}")
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "ai_calls")
@@ -196,13 +200,15 @@ class EntertainmentBot(commands.Bot):
                 result = await self.openrouter.draw(
                     prompt=prompt,
                     model=draw_model,
+                    provider=global_settings.draw_provider,
+                    fallback_providers=global_settings.draw_fallback_providers,
                     size=size,
                     variants=variants,
                     urls=urls,
                 )
                 resolved = await self._await_draw_completion(result)
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"绘图失败：{exc}")
+                await interaction.followup.send(f"绘图失败：{self._describe_error(exc)}")
                 return
 
             images = self._extract_draw_result_urls(resolved)
@@ -449,6 +455,48 @@ class EntertainmentBot(commands.Bot):
             )
             await interaction.response.send_message(text, ephemeral=True)
 
+        @config_group.command(name="global_view", description="查看全局 AI 配置")
+        async def config_global_view(interaction: discord.Interaction) -> None:
+            if not interaction.user.guild_permissions.manage_guild:
+                await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
+                return
+            global_settings = await self.store.get_global_settings()
+            text = "\n".join(
+                [
+                    f"`chat_provider`: {global_settings.chat_provider}",
+                    f"`chat_fallback_providers`: {global_settings.chat_fallback_providers or '-'}",
+                    f"`openrouter_model`: {global_settings.openrouter_model}",
+                    f"`draw_provider`: {global_settings.draw_provider}",
+                    f"`draw_fallback_providers`: {global_settings.draw_fallback_providers or '-'}",
+                    f"`draw_model`: {global_settings.draw_model}",
+                ]
+            )
+            await interaction.response.send_message(text, ephemeral=True)
+
+        @config_group.command(name="global_set", description="修改全局 AI 配置")
+        @app_commands.describe(key="全局配置项名", value="配置值")
+        async def config_global_set(interaction: discord.Interaction, key: str, value: str) -> None:
+            if not interaction.user.guild_permissions.manage_guild:
+                await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
+                return
+            if key not in GLOBAL_SETTING_SPECS:
+                await interaction.response.send_message(
+                    f"未知全局配置项。可选：{', '.join(GLOBAL_SETTING_SPECS.keys())}",
+                    ephemeral=True,
+                )
+                return
+            try:
+                cast_value = cast_setting_value(GLOBAL_SETTING_SPECS, key, value)
+            except Exception as exc:
+                await interaction.response.send_message(f"配置值不合法：{exc}", ephemeral=True)
+                return
+
+            settings = await self.store.update_global_settings({key: cast_value})
+            await interaction.response.send_message(
+                f"已更新全局 `{key}` -> `{getattr(settings, key)}`",
+                ephemeral=True,
+            )
+
         @config_group.command(name="set", description="设置某个配置项")
         @app_commands.describe(key="配置项名", value="配置值")
         async def config_set(interaction: discord.Interaction, key: str, value: str) -> None:
@@ -651,9 +699,11 @@ class EntertainmentBot(commands.Bot):
                 reply = await self.openrouter.chat(
                     messages,
                     model=global_settings.openrouter_model,
+                    provider=global_settings.chat_provider,
+                    fallback_providers=global_settings.chat_fallback_providers,
                 )
             except Exception as exc:  # pragma: no cover - network bound
-                await message.reply(f"AI 调用失败：{exc}", mention_author=False)
+                await message.reply(f"AI 调用失败：{self._describe_error(exc)}", mention_author=False)
                 return
 
             await self.store.increment_user_stat(message.guild.id, message.author.id, "ai_calls")
@@ -908,12 +958,13 @@ class EntertainmentBot(commands.Bot):
             return data
 
         task_id = str(data.get("id", "") or "")
+        provider = str(initial_result.get("_provider", "") or "")
         if not task_id:
             return data
 
         for _ in range(24):
             await asyncio.sleep(2.5)
-            polled = await self.openrouter.draw_result(task_id)
+            polled = await self.openrouter.draw_result(task_id, provider=provider or None)
             polled_data = polled.get("data") if isinstance(polled, dict) and isinstance(polled.get("data"), dict) else polled
             if not isinstance(polled_data, dict):
                 continue
@@ -973,6 +1024,11 @@ class EntertainmentBot(commands.Bot):
                 first = False
             else:
                 await message.channel.send(chunk)
+
+    @staticmethod
+    def _describe_error(exc: Exception) -> str:
+        text = str(exc).strip()
+        return text or exc.__class__.__name__
 
 
 class BotManager:

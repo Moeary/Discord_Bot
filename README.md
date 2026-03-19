@@ -52,12 +52,24 @@ app/
 DISCORD_TOKEN=你的机器人 token
 DISCORD_TEST_GUILD_ID=测试服务器 ID，可选
 
-OPENROUTER_API_KEY=你的 Gemini 中转站 key
-OPENROUTER_BASE_URL=https://grsaiapi.com/v1
-OPENROUTER_MODEL=你要用的模型名，比如 gemini-2.5-pro
-DRAW_API_KEY=绘图接口 key，不填则回退用上面的 key
+AI_PROVIDER_FILE=data/providers.json
+AI_CHAT_PROVIDER=grsai
+AI_CHAT_FALLBACKS=openrouter
+AI_DRAW_PROVIDER=grsai
+AI_DRAW_FALLBACKS=custom
+
+OPENROUTER_API_KEY=你的 OpenRouter key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openrouter/auto
+
+DRAW_API_KEY=legacy 绘图接口 key，不填则回退用上面的 key
 DRAW_BASE_URL=https://grsaiapi.com/v1
 DRAW_MODEL=sora-image
+
+GRSAI_API_KEY=你的 grsai 聊天 key
+GRSAI_DRAW_API_KEY=你的 grsai 绘图 key
+CUSTOM_CHAT_API_KEY=可选的自定义聊天 key
+CUSTOM_DRAW_API_KEY=可选的自定义绘图 key
 
 DANBOORU_USERNAME=你的 danbooru 用户名
 DANBOORU_API_KEY=你的 danbooru api key
@@ -65,8 +77,10 @@ DANBOORU_API_KEY=你的 danbooru api key
 
 说明：
 
-- 这里实际走的是 `OpenAI 兼容 /chat/completions` 接口，所以 Gemini 中转站可以直接接。
-- `OPENROUTER_MODEL` 我这里做成可配置，你后面自己换模型名就行。
+- 聊天这边统一按 `OpenAI 兼容 /chat/completions` 走。
+- `data/providers.json` 里可以配置多个渠道，支持 `api_key_env` 这种写法去引用 `.env` 里的 key。
+- `AI_CHAT_PROVIDER / AI_DRAW_PROVIDER` 是主渠道，`AI_CHAT_FALLBACKS / AI_DRAW_FALLBACKS` 是回退渠道，多个用逗号分隔。
+- 老配置仍然兼容，默认 provider 名叫 `legacy`。
 - `STATE_FILE` 默认是 `data/state.json`，机器人运行后的设置和统计会持久化到这里。
 
 ## 安装与启动
@@ -159,7 +173,9 @@ uvicorn app.main:app --reload
 ### 配置
 
 - `/config view`
+- `/config global_view`
 - `/config set key:<配置项> value:<值>`
+- `/config global_set key:<配置项> value:<值>`
 - `/config tax_channel channel:<频道>`
 
 ## 可调整配置项
@@ -168,6 +184,10 @@ uvicorn app.main:app --reload
 
 - `openrouter_model`
 - `draw_model`
+- `chat_provider`
+- `chat_fallback_providers`
+- `draw_provider`
+- `draw_fallback_providers`
 - `system_prompt`
 - `summary_system_prompt`
 - `max_chat_history`
@@ -201,6 +221,7 @@ uvicorn app.main:app --reload
 - 回复机器人消息会自动触发 AI 对话，并携带上一条 AI 回复与当前用户回复作为上下文。
 - 直接 `@机器人` 说话也会触发 AI，对回复某条消息的场景会优先理解那条被回复的消息。
 - `/ai chat` 和 `@机器人` 对话支持读图；`/ai summary` 默认只总结文字，不猜图片内容。
+- 当主 AI 渠道失败时，会自动尝试 fallback 渠道，并直接把失败原因显示出来。
 - `搬屎交税` 支持“发图消息 + 点指定 emoji”触发，也支持管理员回复关键字手动触发。
 - 补税逻辑默认只认税务频道里的图片附件和常见图片链接。
 - 如果没有配置 `tax_channel_id`，机器人仍会警告，但你最好尽快配置税务频道。

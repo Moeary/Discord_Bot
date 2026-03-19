@@ -6,11 +6,27 @@ from copy import deepcopy
 GLOBAL_SETTING_SPECS = {
     "openrouter_model": {
         "type": "str",
-        "description": "OpenRouter 模型名，支持 openai 格式接口。",
+        "description": "当前聊天模型覆盖值；为空时使用 provider 默认模型。",
     },
     "draw_model": {
         "type": "str",
-        "description": "绘图模型名，支持 sora-image / gpt-image-1.5。",
+        "description": "当前绘图模型覆盖值；为空时使用 provider 默认模型。",
+    },
+    "chat_provider": {
+        "type": "str",
+        "description": "AI 对话主渠道名称，对应 providers.json 里的 provider 名。",
+    },
+    "chat_fallback_providers": {
+        "type": "str",
+        "description": "AI 对话回退渠道，逗号分隔多个 provider 名。",
+    },
+    "draw_provider": {
+        "type": "str",
+        "description": "AI 绘图主渠道名称，对应 providers.json 里的 provider 名。",
+    },
+    "draw_fallback_providers": {
+        "type": "str",
+        "description": "AI 绘图回退渠道，逗号分隔多个 provider 名。",
     },
     "system_prompt": {
         "type": "str",
@@ -134,8 +150,18 @@ COMMAND_REFERENCE = [
     },
     {
         "group": "config",
+        "name": "/config global_view",
+        "description": "查看全局 AI 渠道和模型配置。",
+    },
+    {
+        "group": "config",
         "name": "/config set",
         "description": "外部命令修改服务器设置。",
+    },
+    {
+        "group": "config",
+        "name": "/config global_set",
+        "description": "外部命令修改全局 AI 设置。",
     },
     {
         "group": "config",
