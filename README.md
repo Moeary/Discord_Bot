@@ -53,21 +53,18 @@ DISCORD_TOKEN=你的机器人 token
 DISCORD_TEST_GUILD_ID=测试服务器 ID，可选
 
 AI_PROVIDER_FILE=data/providers.json
-AI_CHAT_PROVIDER=grsai
-AI_CHAT_FALLBACKS=openrouter
-AI_DRAW_PROVIDER=grsai
-AI_DRAW_FALLBACKS=custom
-
-OPENROUTER_API_KEY=你的 OpenRouter key
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=openrouter/auto
-
-DRAW_API_KEY=legacy 绘图接口 key，不填则回退用上面的 key
-DRAW_BASE_URL=https://grsaiapi.com/v1
-DRAW_MODEL=sora-image
-
+GRSAI_BASE_URL=https://grsaiapi.com/v1
+GRSAI_DRAW_BASE_URL=https://grsaiapi.com/v1
 GRSAI_API_KEY=你的 grsai 聊天 key
 GRSAI_DRAW_API_KEY=你的 grsai 绘图 key
+
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=你的 OpenRouter key
+OPENROUTER_SITE_URL=
+OPENROUTER_SITE_NAME=
+
+CUSTOM_BASE_URL=
+CUSTOM_DRAW_BASE_URL=
 CUSTOM_CHAT_API_KEY=可选的自定义聊天 key
 CUSTOM_DRAW_API_KEY=可选的自定义绘图 key
 
@@ -77,10 +74,11 @@ DANBOORU_API_KEY=你的 danbooru api key
 
 说明：
 
-- 聊天这边统一按 `OpenAI 兼容 /chat/completions` 走。
-- `data/providers.json` 里可以配置多个渠道，支持 `api_key_env` 这种写法去引用 `.env` 里的 key。
-- `AI_CHAT_PROVIDER / AI_DRAW_PROVIDER` 是主渠道，`AI_CHAT_FALLBACKS / AI_DRAW_FALLBACKS` 是回退渠道，多个用逗号分隔。
-- 老配置仍然兼容，默认 provider 名叫 `legacy`。
+- `.env` 现在只建议存放 URL、token、api key 这类环境信息。
+- `data/providers.json` 负责声明“渠道”和“模型档案”，每个档案会绑定 `type / provider / adapter / model`。
+- 聊天目前统一按 `OpenAI 兼容 /chat/completions` 走；绘图目前支持 `grsai_draw_completions` 和 `grsai_draw_nano_banana` 两种适配器。
+- `state.json` 只负责记录当前选中的 `chat_model_profile / draw_model_profile` 和群设置。
+- 老配置仍然兼容，默认会自动映射到 `legacy-chat / legacy-draw`。
 - `STATE_FILE` 默认是 `data/state.json`，机器人运行后的设置和统计会持久化到这里。
 
 ## 安装与启动
@@ -153,9 +151,9 @@ uvicorn app.main:app --reload
 
 ### AI
 
-- `/ai chat prompt:<内容> image:<可选图片>`
+- `/ai chat prompt:<内容> image:<可选图片> profile:<可选档案>`
 - `/ai summary limit:<消息数>`
-- `/ai draw prompt:<描述> model:<可选> size:<可选> variants:<1|2>`
+- `/ai draw prompt:<描述> profile:<可选档案> model:<可选覆盖> size:<可选> variants:<1|2>`
 
 ### 娱乐
 
@@ -182,12 +180,10 @@ uvicorn app.main:app --reload
 
 ### 全局配置
 
-- `openrouter_model`
-- `draw_model`
-- `chat_provider`
-- `chat_fallback_providers`
-- `draw_provider`
-- `draw_fallback_providers`
+- `chat_model_profile`
+- `chat_fallback_profiles`
+- `draw_model_profile`
+- `draw_fallback_profiles`
 - `system_prompt`
 - `summary_system_prompt`
 - `max_chat_history`

@@ -17,7 +17,7 @@ from app.bot.client import BotManager, EntertainmentBot
 from app.core.config import BASE_DIR, get_env_settings
 from app.models.state import GlobalSettings
 from app.services.danbooru import DanbooruClient
-from app.services.openrouter import OpenRouterClient
+from app.services.ai_router import ProfiledAIClient
 from app.services.state_store import StateStore
 
 
@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 
 env = get_env_settings()
 store = StateStore(env.state_file)
-openrouter = OpenRouterClient(env)
+openrouter = ProfiledAIClient(env)
 danbooru = DanbooruClient(env)
 bot = EntertainmentBot(env=env, store=store, openrouter=openrouter, danbooru=danbooru)
 bot_manager = BotManager(bot, env)
@@ -39,23 +39,77 @@ async def lifespan(app: FastAPI):
     global_settings = await store.get_global_settings()
     defaults = GlobalSettings()
     updates: dict[str, object] = {}
-    if env.openrouter_model and global_settings.openrouter_model == defaults.openrouter_model:
-        updates["openrouter_model"] = env.openrouter_model
-    if env.draw_model and getattr(global_settings, "draw_model", defaults.draw_model) == defaults.draw_model:
-        updates["draw_model"] = env.draw_model
-    if env.ai_chat_provider and getattr(global_settings, "chat_provider", defaults.chat_provider) == defaults.chat_provider:
-        updates["chat_provider"] = env.ai_chat_provider
-    if getattr(global_settings, "chat_fallback_providers", defaults.chat_fallback_providers) == defaults.chat_fallback_providers:
-        updates["chat_fallback_providers"] = env.ai_chat_fallbacks
-    if env.ai_draw_provider and getattr(global_settings, "draw_provider", defaults.draw_provider) == defaults.draw_provider:
-        updates["draw_provider"] = env.ai_draw_provider
-    if getattr(global_settings, "draw_fallback_providers", defaults.draw_fallback_providers) == defaults.draw_fallback_providers:
-        updates["draw_fallback_providers"] = env.ai_draw_fallbacks
+    if getattr(global_settings, "chat_model_profile", defaults.chat_model_profile) == defaults.chat_model_profile:
+        migrated_chat_profile = _migrate_chat_profile(global_settings)
+        if migrated_chat_profile:
+            updates["chat_model_profile"] = migrated_chat_profile
+    if getattr(global_settings, "chat_fallback_profiles", defaults.chat_fallback_profiles) == defaults.chat_fallback_profiles:
+        migrated_chat_fallbacks = _migrate_chat_fallbacks(global_settings)
+        if migrated_chat_fallbacks:
+            updates["chat_fallback_profiles"] = migrated_chat_fallbacks
+    if getattr(global_settings, "draw_model_profile", defaults.draw_model_profile) == defaults.draw_model_profile:
+        migrated_draw_profile = _migrate_draw_profile(global_settings)
+        if migrated_draw_profile:
+            updates["draw_model_profile"] = migrated_draw_profile
+    if getattr(global_settings, "draw_fallback_profiles", defaults.draw_fallback_profiles) == defaults.draw_fallback_profiles:
+        migrated_draw_fallbacks = _migrate_draw_fallbacks(global_settings)
+        if migrated_draw_fallbacks:
+            updates["draw_fallback_profiles"] = migrated_draw_fallbacks
     if updates:
         await store.update_global_settings(updates)
     await bot_manager.start()
     yield
     await bot_manager.stop()
+
+
+def _migrate_chat_profile(settings: GlobalSettings) -> str:
+    provider = getattr(settings, "chat_provider", "").strip()
+    model = getattr(settings, "openrouter_model", "").strip()
+    if provider == "grsai" and model == "gemini-3.1-pro":
+        return "grsai-gemini-3.1-pro"
+    if provider == "openrouter" and model == "x-ai/grok-4.1-fast":
+        return "openrouter-grok-4.1-fast"
+    if provider == "openrouter" and model == "openrouter/auto":
+        return "openrouter-auto"
+    return "legacy-chat"
+
+
+def _migrate_chat_fallbacks(settings: GlobalSettings) -> str:
+    raw = getattr(settings, "chat_fallback_providers", "").strip()
+    if not raw:
+        return ""
+    mapping = {
+        "legacy": "legacy-chat",
+        "grsai": "grsai-gemini-3.1-pro",
+        "openrouter": "openrouter-auto",
+    }
+    names = [mapping.get(item.strip(), item.strip()) for item in raw.split(",") if item.strip()]
+    return ",".join(dict.fromkeys(names))
+
+
+def _migrate_draw_profile(settings: GlobalSettings) -> str:
+    provider = getattr(settings, "draw_provider", "").strip()
+    model = getattr(settings, "draw_model", "").strip()
+    if provider == "grsai" and model == "gpt-image-1.5":
+        return "grsai-gpt-image"
+    if provider == "grsai" and model in {"nano-banana-2", "nano-banana-fast"}:
+        return "grsai-banana2" if model == "nano-banana-2" else "grsai-banana-fast"
+    if provider in {"grsai", "legacy"} and model == "sora-image":
+        return "grsai-sora-image"
+    return "legacy-draw"
+
+
+def _migrate_draw_fallbacks(settings: GlobalSettings) -> str:
+    raw = getattr(settings, "draw_fallback_providers", "").strip()
+    if not raw:
+        return ""
+    mapping = {
+        "legacy": "legacy-draw",
+        "grsai": "grsai-sora-image",
+        "openrouter": "legacy-draw",
+    }
+    names = [mapping.get(item.strip(), item.strip()) for item in raw.split(",") if item.strip()]
+    return ",".join(dict.fromkeys(names))
 
 
 app = FastAPI(

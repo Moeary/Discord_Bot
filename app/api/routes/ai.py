@@ -24,9 +24,9 @@ async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
     try:
         reply = await request.app.state.openrouter.chat(
             messages,
-            model=payload.model or global_settings.openrouter_model,
-            provider=payload.provider or global_settings.chat_provider,
-            fallback_providers=payload.fallback_providers or global_settings.chat_fallback_providers,
+            model=payload.model or None,
+            profile=payload.profile or global_settings.chat_model_profile,
+            fallback_profiles=payload.fallback_profiles or global_settings.chat_fallback_profiles,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
@@ -44,9 +44,9 @@ async def summary(request: Request, payload: SummaryRequest) -> dict[str, str]:
         reply = await request.app.state.openrouter.summarize_text(
             global_settings.summary_system_prompt,
             text,
-            model=payload.model or global_settings.openrouter_model,
-            provider=payload.provider or global_settings.chat_provider,
-            fallback_providers=payload.fallback_providers or global_settings.chat_fallback_providers,
+            model=payload.model or None,
+            profile=payload.profile or global_settings.chat_model_profile,
+            fallback_profiles=payload.fallback_profiles or global_settings.chat_fallback_profiles,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
@@ -57,13 +57,12 @@ async def summary(request: Request, payload: SummaryRequest) -> dict[str, str]:
 async def draw(request: Request, payload: DrawRequest) -> dict[str, object]:
     store = request.app.state.store
     global_settings = await store.get_global_settings()
-    draw_model = payload.model or getattr(global_settings, "draw_model", "sora-image")
     try:
         result = await request.app.state.openrouter.draw(
             prompt=payload.prompt,
-            model=draw_model,
-            provider=payload.provider or global_settings.draw_provider,
-            fallback_providers=payload.fallback_providers or global_settings.draw_fallback_providers,
+            model=payload.model or None,
+            profile=payload.profile or global_settings.draw_model_profile,
+            fallback_profiles=payload.fallback_profiles or global_settings.draw_fallback_profiles,
             size=payload.size,
             variants=payload.variants,
             urls=payload.urls,
@@ -78,7 +77,11 @@ async def draw(request: Request, payload: DrawRequest) -> dict[str, object]:
 @router.post("/draw/result")
 async def draw_result(request: Request, payload: DrawResultRequest) -> dict[str, object]:
     try:
-        result = await request.app.state.openrouter.draw_result(payload.id, provider=payload.provider)
+        result = await request.app.state.openrouter.draw_result(
+            payload.id,
+            profile=payload.profile,
+            provider=payload.provider,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=_describe_error(exc)) from exc
     return {"result": result}

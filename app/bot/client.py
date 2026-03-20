@@ -15,7 +15,7 @@ from app.core.config import EnvSettings
 from app.models.state import GuildSettings, TaxCase, utcnow
 from app.services.danbooru import DanbooruClient
 from app.services.fun import FunService
-from app.services.openrouter import OpenRouterClient
+from app.services.ai_router import ProfiledAIClient
 from app.services.state_store import StateStore
 
 
@@ -24,6 +24,22 @@ IMAGE_URL_RE = re.compile(r"https?://\S+\.(?:png|jpe?g|gif|webp)", re.IGNORECASE
 RATING_TAG_RE = re.compile(r"\brating:(?:s|q|e|safe|questionable|explicit|general)\b", re.IGNORECASE)
 TAX_REPLY_KEYWORDS = {"税", "交税", "补税", "税务"}
 SHIT_EMOJI_ALIASES = {"shit", "poop", "pile_of_poo", "💩"}
+DIRECT_DRAW_PREFIXES = (
+    "draw",
+    "画",
+    "画个",
+    "画一张",
+    "画张",
+    "来张图",
+    "来一张图",
+    "生成图",
+    "生成一张图",
+    "绘图",
+    "改图",
+    "p图",
+)
+SAFE_IMAGE_KEYWORDS = ("来张美图", "来点美图", "来张好图", "来点好图", "来张老婆图", "来张图")
+EXPLICIT_IMAGE_KEYWORDS = ("来张色图", "来点色图", "来张涩图", "来点涩图", "来张nsfw", "来点nsfw")
 BOT_THINKING_GUARD = (
     "不要输出思考过程、不要输出推理草稿、不要输出<think>标签，"
     "只给最终答案。"
@@ -36,7 +52,7 @@ class EntertainmentBot(commands.Bot):
         *,
         env: EnvSettings,
         store: StateStore,
-        openrouter: OpenRouterClient,
+        openrouter: ProfiledAIClient,
         danbooru: DanbooruClient,
     ) -> None:
         intents = discord.Intents.default()
@@ -86,11 +102,16 @@ class EntertainmentBot(commands.Bot):
         )
 
         @ai_group.command(name="chat", description="和 AI 聊天")
-        @app_commands.describe(prompt="你想让 AI 回复的内容", image="可选：附带一张图片给 AI 一起看")
+        @app_commands.describe(
+            prompt="你想让 AI 回复的内容",
+            image="可选：附带一张图片给 AI 一起看",
+            profile="可选：指定聊天模型档案名，例如 grsai-gemini-3.1-pro",
+        )
         async def ai_chat(
             interaction: discord.Interaction,
             prompt: str,
             image: discord.Attachment | None = None,
+            profile: str | None = None,
         ) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
@@ -118,9 +139,8 @@ class EntertainmentBot(commands.Bot):
             try:
                 reply = await self.openrouter.chat(
                     messages,
-                    model=global_settings.openrouter_model,
-                    provider=global_settings.chat_provider,
-                    fallback_providers=global_settings.chat_fallback_providers,
+                    profile=profile or global_settings.chat_model_profile,
+                    fallback_profiles=global_settings.chat_fallback_profiles,
                 )
             except Exception as exc:  # pragma: no cover - network bound
                 await interaction.followup.send(f"AI 调用失败：{self._describe_error(exc)}")
@@ -155,9 +175,8 @@ class EntertainmentBot(commands.Bot):
                 reply = await self.openrouter.summarize_text(
                     self._compose_ai_system_prompt(global_settings.summary_system_prompt),
                     transcript,
-                    model=global_settings.openrouter_model,
-                    provider=global_settings.chat_provider,
-                    fallback_providers=global_settings.chat_fallback_providers,
+                    profile=global_settings.chat_model_profile,
+                    fallback_profiles=global_settings.chat_fallback_profiles,
                 )
             except Exception as exc:  # pragma: no cover - network bound
                 await interaction.followup.send(f"AI 总结失败：{self._describe_error(exc)}")
@@ -169,14 +188,16 @@ class EntertainmentBot(commands.Bot):
         @ai_group.command(name="draw", description="AI 绘图")
         @app_commands.describe(
             prompt="你想生成的图片描述",
-            model="可选：sora-image 或 gpt-image-1.5",
-            size="可选：auto / 1:1 / 3:2 / 2:3",
+            profile="可选：指定绘图模型档案名，例如 grsai-sora-image / grsai-banana2",
+            model="可选：临时覆盖档案内的模型名",
+            size="可选：比例参数。Sora/GPT 用 size，Banana 档案会把它当 aspectRatio",
             variants="可选：生成张数 1 或 2",
             image="可选：参考图",
         )
         async def ai_draw(
             interaction: discord.Interaction,
             prompt: str,
+            profile: str | None = None,
             model: str | None = None,
             size: str = "1:1",
             variants: app_commands.Range[int, 1, 2] = 1,
@@ -191,7 +212,7 @@ class EntertainmentBot(commands.Bot):
 
             await interaction.response.defer(thinking=True)
             global_settings = await self.store.get_global_settings()
-            draw_model = model or getattr(global_settings, "draw_model", "sora-image")
+            draw_profile = profile or getattr(global_settings, "draw_model_profile", "legacy-draw")
             urls: list[str] = []
             if image is not None and self._attachment_is_image(image):
                 urls.append(image.url)
@@ -199,9 +220,9 @@ class EntertainmentBot(commands.Bot):
             try:
                 result = await self.openrouter.draw(
                     prompt=prompt,
-                    model=draw_model,
-                    provider=global_settings.draw_provider,
-                    fallback_providers=global_settings.draw_fallback_providers,
+                    model=model or None,
+                    profile=draw_profile,
+                    fallback_profiles=global_settings.draw_fallback_profiles,
                     size=size,
                     variants=variants,
                     urls=urls,
@@ -217,8 +238,35 @@ class EntertainmentBot(commands.Bot):
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "ai_calls")
-            header = f"模型: `{draw_model}` | 比例: `{size}` | 数量: `{len(images)}`"
+            header_parts = [
+                f"档案: `{result.get('_profile', draw_profile)}`",
+                f"比例: `{size}`",
+                f"数量: `{len(images)}`",
+            ]
+            if result.get("_warning"):
+                header_parts.append(str(result["_warning"]))
+            header = " | ".join(header_parts)
             await interaction.followup.send("\n".join([header, *images]))
+
+        @ai_group.command(name="image", description="AI 画图（/ai draw 别名）")
+        @app_commands.describe(
+            prompt="你想生成的图片描述",
+            profile="可选：指定绘图模型档案名，例如 grsai-sora-image / grsai-banana2",
+            model="可选：临时覆盖档案内的模型名",
+            size="可选：比例参数",
+            variants="可选：生成张数 1 或 2",
+            image="可选：参考图",
+        )
+        async def ai_image(
+            interaction: discord.Interaction,
+            prompt: str,
+            profile: str | None = None,
+            model: str | None = None,
+            size: str = "1:1",
+            variants: app_commands.Range[int, 1, 2] = 1,
+            image: discord.Attachment | None = None,
+        ) -> None:
+            await ai_draw(interaction, prompt, profile, model, size, variants, image)
 
         @fun_group.command(name="danbooru", description="Danbooru 随机找图")
         @app_commands.describe(tags="额外标签，例如 1girl blue_hair")
@@ -231,30 +279,62 @@ class EntertainmentBot(commands.Bot):
                 return
 
             await interaction.response.defer(thinking=True)
-            is_nsfw = self._channel_is_nsfw(interaction.channel)
-            forced_rating = "rating:e" if is_nsfw else "rating:s"
-            search_tags = self._compose_danbooru_tags(
-                guild_settings.danbooru_default_tags,
-                tags or "",
-                forced_rating,
-            )
             try:
-                post = await self.danbooru.random_post(search_tags)
+                is_nsfw = self._channel_is_nsfw(interaction.channel)
+                post = await self._fetch_danbooru_post(
+                    guild_settings,
+                    tags or "",
+                    forced_rating="rating:e" if is_nsfw else "rating:s",
+                )
             except Exception as exc:  # pragma: no cover - network bound
                 await interaction.followup.send(f"Danbooru 请求失败：{exc}")
                 return
 
-            embed = discord.Embed(
-                title=f"Danbooru #{post['id']}",
-                description=f"rating: `{post['rating']}`\n[查看原帖]({post['post_url']})",
-                color=discord.Color.blurple(),
-            )
-            if post["file_url"]:
-                embed.set_image(url=post["file_url"])
-            tags_text = post["tags"][:900] if post["tags"] else "无标签"
-            embed.add_field(name="Tags", value=tags_text, inline=False)
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(embed=self._build_danbooru_embed(post))
+
+        @fun_group.command(name="pretty", description="来张安全美图")
+        @app_commands.describe(tags="额外标签，例如 1girl blue_hair")
+        async def fun_pretty(interaction: discord.Interaction, tags: str | None = None) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True)
+            try:
+                post = await self._fetch_danbooru_post(guild_settings, tags or "", forced_rating="rating:s")
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"Danbooru 请求失败：{exc}")
+                return
+
+            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
+            await interaction.followup.send(embed=self._build_danbooru_embed(post))
+
+        @fun_group.command(name="lewd", description="来张涩图，仅限 NSFW 频道")
+        @app_commands.describe(tags="额外标签，例如 azur_lane bunny_girl")
+        async def fun_lewd(interaction: discord.Interaction, tags: str | None = None) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+            if not self._channel_is_nsfw(interaction.channel):
+                await interaction.response.send_message("涩图去 NSFW 频道叫我。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True)
+            try:
+                post = await self._fetch_danbooru_post(guild_settings, tags or "", forced_rating="rating:e")
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"Danbooru 请求失败：{exc}")
+                return
+
+            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
+            await interaction.followup.send(embed=self._build_danbooru_embed(post))
 
         @fun_group.command(name="fortune", description="看看今天运势")
         async def fun_fortune(interaction: discord.Interaction) -> None:
@@ -463,12 +543,10 @@ class EntertainmentBot(commands.Bot):
             global_settings = await self.store.get_global_settings()
             text = "\n".join(
                 [
-                    f"`chat_provider`: {global_settings.chat_provider}",
-                    f"`chat_fallback_providers`: {global_settings.chat_fallback_providers or '-'}",
-                    f"`openrouter_model`: {global_settings.openrouter_model}",
-                    f"`draw_provider`: {global_settings.draw_provider}",
-                    f"`draw_fallback_providers`: {global_settings.draw_fallback_providers or '-'}",
-                    f"`draw_model`: {global_settings.draw_model}",
+                    f"`chat_model_profile`: {global_settings.chat_model_profile}",
+                    f"`chat_fallback_profiles`: {global_settings.chat_fallback_profiles or '-'}",
+                    f"`draw_model_profile`: {global_settings.draw_model_profile}",
+                    f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
                 ]
             )
             await interaction.response.send_message(text, ephemeral=True)
@@ -677,6 +755,15 @@ class EntertainmentBot(commands.Bot):
                 return
 
             global_settings = await self.store.get_global_settings()
+            if await self._handle_direct_bot_command(
+                message,
+                prompt=prompt,
+                referenced=referenced,
+                guild_settings=settings,
+                global_settings=global_settings,
+            ):
+                return
+
             messages = [
                 {
                     "role": "system",
@@ -698,9 +785,8 @@ class EntertainmentBot(commands.Bot):
             try:
                 reply = await self.openrouter.chat(
                     messages,
-                    model=global_settings.openrouter_model,
-                    provider=global_settings.chat_provider,
-                    fallback_providers=global_settings.chat_fallback_providers,
+                    profile=global_settings.chat_model_profile,
+                    fallback_profiles=global_settings.chat_fallback_profiles,
                 )
             except Exception as exc:  # pragma: no cover - network bound
                 await message.reply(f"AI 调用失败：{self._describe_error(exc)}", mention_author=False)
@@ -931,6 +1017,262 @@ class EntertainmentBot(commands.Bot):
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return f"{forced_rating} {cleaned}".strip()
 
+    async def _handle_direct_bot_command(
+        self,
+        message: discord.Message,
+        *,
+        prompt: str,
+        referenced: discord.Message | None,
+        guild_settings: GuildSettings,
+        global_settings,
+    ) -> bool:
+        normalized = self._normalize_direct_prompt(prompt)
+
+        if draw_request := self._parse_direct_draw_request(prompt):
+            await self._handle_direct_draw(
+                message,
+                draw_request,
+                referenced=referenced,
+                global_settings=global_settings,
+            )
+            return True
+
+        explicit_tags = self._extract_direct_image_tags(prompt, EXPLICIT_IMAGE_KEYWORDS)
+        if explicit_tags is not None:
+            await self._handle_direct_danbooru(
+                message,
+                guild_settings=guild_settings,
+                forced_rating="rating:e",
+                extra_tags=explicit_tags,
+                nsfw_required=True,
+            )
+            return True
+
+        safe_tags = self._extract_direct_image_tags(prompt, SAFE_IMAGE_KEYWORDS)
+        if safe_tags is not None:
+            await self._handle_direct_danbooru(
+                message,
+                guild_settings=guild_settings,
+                forced_rating="rating:s",
+                extra_tags=safe_tags,
+                nsfw_required=False,
+            )
+            return True
+
+        if any(keyword in normalized for keyword in ("今日运势", "运势")):
+            result = FunService.daily_fortune(message.author.id, message.guild.id)
+            await self.store.increment_user_stat(message.guild.id, message.author.id, "fortune_calls")
+            await message.reply(
+                f"{message.author.mention} 今日运势 `{result['score']}/100`\n{result['text']}",
+                mention_author=False,
+            )
+            return True
+
+        if any(keyword in normalized for keyword in ("轮盘", "roulette")):
+            result = FunService.roulette()
+            await self.store.increment_user_stat(message.guild.id, message.author.id, "roulette_calls")
+            await message.reply(
+                f"{message.author.mention} 扣下扳机……\n{result['text']} (弹仓位置: {result['chamber']}/6)",
+                mention_author=False,
+            )
+            return True
+
+        if any(keyword in normalized for keyword in ("抛硬币", "硬币", "coin")):
+            result = FunService.coinflip(message.author.id, message.guild.id)
+            await message.reply(
+                f"{message.author.mention} {result['text']}\n结果：`{result['side']}`",
+                mention_author=False,
+            )
+            return True
+
+        if any(keyword in normalized for keyword in ("抽签", "签运")):
+            result = FunService.lottery(message.author.id, message.guild.id)
+            await self.store.increment_user_stat(message.guild.id, message.author.id, "lottery_calls")
+            await message.reply(
+                f"{message.author.mention} 今日签运点数：`{result['roll']}`\n"
+                f"稀有度：`{result['rarity']}`\n{result['text']}\n{result['omen']}",
+                mention_author=False,
+            )
+            return True
+
+        if any(keyword in normalized for keyword in ("老婆", "老公", "waifu")):
+            members = [member for member in message.guild.members if not member.bot]
+            target_id = FunService.pick_waifu(
+                [member.id for member in members],
+                message.guild.id,
+                message.author.id,
+                utcnow().strftime("%Y-%m-%d"),
+            )
+            if target_id is None:
+                await message.reply("服务器里没有可选成员。", mention_author=False)
+                return True
+            target = message.guild.get_member(target_id)
+            await message.reply(
+                f"{message.author.mention} 今日命中目标：{target.mention if target else target_id}",
+                mention_author=False,
+            )
+            return True
+
+        if choose_options := self._parse_direct_choose_options(prompt):
+            try:
+                result = FunService.choose(choose_options, message.guild.id, message.author.id)
+            except ValueError as exc:
+                await message.reply(str(exc), mention_author=False)
+                return True
+            await message.reply(
+                f"{message.author.mention} 我替你做了决定：`{result['choice']}`",
+                mention_author=False,
+            )
+            return True
+
+        if self._is_direct_eightball(prompt):
+            result = FunService.eight_ball(prompt, message.guild.id, message.author.id)
+            await message.reply(
+                f"{message.author.mention} 回答：{result['answer']}",
+                mention_author=False,
+            )
+            return True
+
+        return False
+
+    async def _handle_direct_draw(
+        self,
+        message: discord.Message,
+        draw_request: dict[str, str | None],
+        *,
+        referenced: discord.Message | None,
+        global_settings,
+    ) -> None:
+        urls = self._extract_image_urls_from_message(message)
+        if referenced is not None:
+            for image_url in self._extract_image_urls_from_message(referenced):
+                if image_url not in urls:
+                    urls.append(image_url)
+
+        prompt_text = (draw_request.get("prompt") or "").strip()
+        if not prompt_text and urls:
+            prompt_text = "请基于提供的图片做一次高质量改图，保留主体和关键细节。"
+        if not prompt_text:
+            await message.reply("想让我画图的话，至少给一句描述，或者带上一张参考图。", mention_author=False)
+            return
+
+        try:
+            result = await self.openrouter.draw(
+                prompt=prompt_text,
+                profile=getattr(global_settings, "draw_model_profile", "legacy-draw"),
+                fallback_profiles=getattr(global_settings, "draw_fallback_profiles", ""),
+                size="1:1",
+                variants=1,
+                urls=urls or None,
+            )
+            resolved = await self._await_draw_completion(result)
+        except Exception as exc:
+            await message.reply(f"绘图失败：{self._describe_error(exc)}", mention_author=False)
+            return
+
+        images = self._extract_draw_result_urls(resolved)
+        if not images:
+            await message.reply(f"绘图任务回来了，但没吐出图片地址：{resolved}", mention_author=False)
+            return
+
+        header_parts = [f"档案: `{resolved.get('_profile', getattr(global_settings, 'draw_model_profile', 'legacy-draw'))}`"]
+        if resolved.get("_warning"):
+            header_parts.append(str(resolved["_warning"]))
+        await self._reply_in_chunks(message, "\n".join([" | ".join(header_parts), *images]))
+
+    async def _handle_direct_danbooru(
+        self,
+        message: discord.Message,
+        *,
+        guild_settings: GuildSettings,
+        forced_rating: str,
+        extra_tags: str,
+        nsfw_required: bool,
+    ) -> None:
+        if nsfw_required and not self._channel_is_nsfw(message.channel):
+            await message.reply("涩图去 NSFW 频道叫我。", mention_author=False)
+            return
+
+        try:
+            post = await self._fetch_danbooru_post(guild_settings, extra_tags, forced_rating=forced_rating)
+        except Exception as exc:
+            await message.reply(f"Danbooru 请求失败：{self._describe_error(exc)}", mention_author=False)
+            return
+
+        await self.store.increment_user_stat(message.guild.id, message.author.id, "danbooru_calls")
+        await message.reply(embed=self._build_danbooru_embed(post), mention_author=False)
+
+    async def _fetch_danbooru_post(
+        self,
+        guild_settings: GuildSettings,
+        extra_tags: str,
+        *,
+        forced_rating: str,
+    ) -> dict[str, object]:
+        search_tags = self._compose_danbooru_tags(
+            guild_settings.danbooru_default_tags,
+            extra_tags,
+            forced_rating,
+        )
+        return await self.danbooru.random_post(search_tags)
+
+    @staticmethod
+    def _build_danbooru_embed(post: dict[str, object]) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"Danbooru #{post['id']}",
+            description=f"rating: `{post['rating']}`\n[查看原帖]({post['post_url']})",
+            color=discord.Color.blurple(),
+        )
+        if post.get("file_url"):
+            embed.set_image(url=str(post["file_url"]))
+        tags_text = str(post.get("tags") or "无标签")[:900]
+        embed.add_field(name="Tags", value=tags_text, inline=False)
+        return embed
+
+    @staticmethod
+    def _normalize_direct_prompt(prompt: str) -> str:
+        return re.sub(r"\s+", "", (prompt or "").strip()).lower()
+
+    @staticmethod
+    def _extract_direct_image_tags(prompt: str, keywords: tuple[str, ...]) -> str | None:
+        trimmed = (prompt or "").strip()
+        normalized = re.sub(r"\s+", "", trimmed)
+        for keyword in keywords:
+            if normalized.startswith(keyword):
+                raw = trimmed
+                if raw.startswith(keyword):
+                    return raw[len(keyword):].strip(" ：:-")
+                return ""
+        return None
+
+    @staticmethod
+    def _parse_direct_draw_request(prompt: str) -> dict[str, str | None] | None:
+        trimmed = (prompt or "").strip()
+        lowered = trimmed.lower()
+        for prefix in DIRECT_DRAW_PREFIXES:
+            if lowered.startswith(prefix):
+                remainder = trimmed[len(prefix):].strip(" ：:-")
+                return {"prompt": remainder or None}
+        return None
+
+    @staticmethod
+    def _parse_direct_choose_options(prompt: str) -> list[str] | None:
+        trimmed = (prompt or "").strip()
+        lowered = trimmed.lower()
+        if lowered.startswith("choose"):
+            body = trimmed[6:].strip(" ：:-")
+            return [item.strip() for item in body.split("|") if item.strip()]
+        if trimmed.startswith("选一个"):
+            body = trimmed[3:].strip(" ：:-")
+            return [item.strip() for item in body.split("|") if item.strip()]
+        return None
+
+    @staticmethod
+    def _is_direct_eightball(prompt: str) -> bool:
+        trimmed = (prompt or "").strip()
+        lowered = trimmed.lower()
+        return lowered.startswith("8ball") or lowered.startswith("eightball")
+
     @staticmethod
     def _channel_is_nsfw(channel: discord.abc.GuildChannel | discord.Thread | None) -> bool:
         if channel is None:
@@ -953,21 +1295,36 @@ class EntertainmentBot(commands.Bot):
         if not isinstance(data, dict):
             raise RuntimeError(f"Unexpected draw response data: {initial_result}")
 
+        profile = str(initial_result.get("_profile", "") or "")
+        provider = str(initial_result.get("_provider", "") or "")
+        warning = initial_result.get("_warning")
+
         status = str(data.get("status", "")).lower()
         if status in {"succeeded", "failed"}:
+            if provider:
+                data["_provider"] = provider
+            if profile:
+                data["_profile"] = profile
+            if warning:
+                data["_warning"] = warning
             return data
 
         task_id = str(data.get("id", "") or "")
-        provider = str(initial_result.get("_provider", "") or "")
         if not task_id:
             return data
 
         for _ in range(24):
             await asyncio.sleep(2.5)
-            polled = await self.openrouter.draw_result(task_id, provider=provider or None)
+            polled = await self.openrouter.draw_result(task_id, profile=profile or None, provider=provider or None)
             polled_data = polled.get("data") if isinstance(polled, dict) and isinstance(polled.get("data"), dict) else polled
             if not isinstance(polled_data, dict):
                 continue
+            if provider:
+                polled_data["_provider"] = provider
+            if profile:
+                polled_data["_profile"] = profile
+            if warning:
+                polled_data["_warning"] = warning
             polled_status = str(polled_data.get("status", "")).lower()
             if polled_status in {"succeeded", "failed"}:
                 return polled_data

@@ -13,8 +13,8 @@ class ChatRequest(BaseModel):
     prompt: str
     system_prompt: str | None = None
     model: str | None = None
-    provider: str | None = None
-    fallback_providers: str | None = None
+    profile: str | None = None
+    fallback_profiles: str | None = None
     image_urls: list[str] = Field(default_factory=list)
 
 
@@ -22,8 +22,8 @@ class SummaryRequest(BaseModel):
     text: str | None = None
     messages: list[str] = Field(default_factory=list)
     model: str | None = None
-    provider: str | None = None
-    fallback_providers: str | None = None
+    profile: str | None = None
+    fallback_profiles: str | None = None
     include_image_hints: bool = False
 
     @model_validator(mode="after")
@@ -35,9 +35,9 @@ class SummaryRequest(BaseModel):
 
 class DrawRequest(BaseModel):
     prompt: str
-    model: str = "sora-image"
-    provider: str | None = None
-    fallback_providers: str | None = None
+    model: str | None = None
+    profile: str | None = None
+    fallback_profiles: str | None = None
     size: str = "1:1"
     variants: int = 1
     urls: list[str] = Field(default_factory=list)
@@ -47,4 +47,5 @@ class DrawRequest(BaseModel):
 
 class DrawResultRequest(BaseModel):
     id: str
+    profile: str | None = None
     provider: str | None = None

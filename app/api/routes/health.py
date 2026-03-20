@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Request
 
 
@@ -17,10 +19,12 @@ async def health(request: Request) -> dict[str, object]:
         "bot_last_error": bot_manager.last_error,
         "discord_token_configured": bool(env.discord_token),
         "openrouter_configured": bool(env.openrouter_api_key),
+        "grsai_configured": bool(os.getenv("GRSAI_API_KEY") or env.openrouter_api_key),
         "danbooru_configured": bool(env.danbooru_username and env.danbooru_api_key),
-        "chat_provider": global_settings.chat_provider,
-        "chat_fallback_providers": global_settings.chat_fallback_providers,
-        "draw_provider": global_settings.draw_provider,
-        "draw_fallback_providers": global_settings.draw_fallback_providers,
+        "provider_file": str(env.ai_provider_file),
+        "chat_model_profile": global_settings.chat_model_profile,
+        "chat_fallback_profiles": global_settings.chat_fallback_profiles,
+        "draw_model_profile": global_settings.draw_model_profile,
+        "draw_fallback_profiles": global_settings.draw_fallback_profiles,
         "providers": request.app.state.openrouter.list_providers(),
     }

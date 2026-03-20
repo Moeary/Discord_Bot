@@ -4,29 +4,21 @@ from copy import deepcopy
 
 
 GLOBAL_SETTING_SPECS = {
-    "openrouter_model": {
+    "chat_model_profile": {
         "type": "str",
-        "description": "当前聊天模型覆盖值；为空时使用 provider 默认模型。",
+        "description": "当前聊天模型档案名，对应 providers.json 里的 model_profiles。",
     },
-    "draw_model": {
+    "chat_fallback_profiles": {
         "type": "str",
-        "description": "当前绘图模型覆盖值；为空时使用 provider 默认模型。",
+        "description": "聊天回退模型档案，逗号分隔多个档案名。",
     },
-    "chat_provider": {
+    "draw_model_profile": {
         "type": "str",
-        "description": "AI 对话主渠道名称，对应 providers.json 里的 provider 名。",
+        "description": "当前绘图模型档案名，对应 providers.json 里的 model_profiles。",
     },
-    "chat_fallback_providers": {
+    "draw_fallback_profiles": {
         "type": "str",
-        "description": "AI 对话回退渠道，逗号分隔多个 provider 名。",
-    },
-    "draw_provider": {
-        "type": "str",
-        "description": "AI 绘图主渠道名称，对应 providers.json 里的 provider 名。",
-    },
-    "draw_fallback_providers": {
-        "type": "str",
-        "description": "AI 绘图回退渠道，逗号分隔多个 provider 名。",
+        "description": "绘图回退模型档案，逗号分隔多个档案名。",
     },
     "system_prompt": {
         "type": "str",
@@ -94,9 +86,24 @@ COMMAND_REFERENCE = [
         "description": "调用绘图接口生成图片。",
     },
     {
+        "group": "ai",
+        "name": "/ai image",
+        "description": "AI 绘图别名命令。",
+    },
+    {
         "group": "fun",
         "name": "/fun danbooru",
         "description": "从 Danbooru 随机找图；NSFW 频道强制 rating:e，普通频道强制 rating:s。",
+    },
+    {
+        "group": "fun",
+        "name": "/fun pretty",
+        "description": "快速来张安全美图。",
+    },
+    {
+        "group": "fun",
+        "name": "/fun lewd",
+        "description": "快速来张涩图，仅限 NSFW 频道。",
     },
     {
         "group": "fun",
@@ -151,7 +158,7 @@ COMMAND_REFERENCE = [
     {
         "group": "config",
         "name": "/config global_view",
-        "description": "查看全局 AI 渠道和模型配置。",
+        "description": "查看全局 AI 档案和模型配置。",
     },
     {
         "group": "config",
@@ -161,7 +168,7 @@ COMMAND_REFERENCE = [
     {
         "group": "config",
         "name": "/config global_set",
-        "description": "外部命令修改全局 AI 设置。",
+        "description": "外部命令修改全局 AI 档案设置。",
     },
     {
         "group": "config",
