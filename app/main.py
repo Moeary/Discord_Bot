@@ -14,10 +14,13 @@ from app.api.routes.health import health as health_handler
 from app.api.routes.health import router as health_router
 from app.api.routes.settings import router as settings_router
 from app.bot.client import BotManager, EntertainmentBot
+from app.core.catalog import get_setting_catalog
 from app.core.config import BASE_DIR, get_env_settings
 from app.models.state import GlobalSettings
-from app.services.danbooru import DanbooruClient
 from app.services.ai_router import ProfiledAIClient
+from app.services.image_sources import ImageSourceRouter
+from app.services.personas import PersonaStore
+from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
 
 
@@ -26,8 +29,17 @@ logging.basicConfig(level=logging.INFO)
 env = get_env_settings()
 store = StateStore(env.state_file)
 openrouter = ProfiledAIClient(env)
-danbooru = DanbooruClient(env)
-bot = EntertainmentBot(env=env, store=store, openrouter=openrouter, danbooru=danbooru)
+image_sources = ImageSourceRouter(env)
+personas = PersonaStore(env)
+saucenao = SauceNaoClient(env)
+bot = EntertainmentBot(
+    env=env,
+    store=store,
+    openrouter=openrouter,
+    image_sources=image_sources,
+    personas=personas,
+    saucenao=saucenao,
+)
 bot_manager = BotManager(bot, env)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "web" / "templates"))
@@ -55,6 +67,20 @@ async def lifespan(app: FastAPI):
         migrated_draw_fallbacks = _migrate_draw_fallbacks(global_settings)
         if migrated_draw_fallbacks:
             updates["draw_fallback_profiles"] = migrated_draw_fallbacks
+    persona = personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
+    if (
+        not getattr(global_settings, "system_prompt_override", "").strip()
+        and getattr(global_settings, "system_prompt", "").strip()
+        and getattr(global_settings, "system_prompt", "").strip() != str(persona.get("system_prompt", "")).strip()
+    ):
+        updates["system_prompt_override"] = getattr(global_settings, "system_prompt", "").strip()
+    if (
+        not getattr(global_settings, "summary_system_prompt_override", "").strip()
+        and getattr(global_settings, "summary_system_prompt", "").strip()
+        and getattr(global_settings, "summary_system_prompt", "").strip()
+        != str(persona.get("summary_system_prompt", "")).strip()
+    ):
+        updates["summary_system_prompt_override"] = getattr(global_settings, "summary_system_prompt", "").strip()
     if updates:
         await store.update_global_settings(updates)
     await bot_manager.start()
@@ -116,6 +142,8 @@ app = FastAPI(
     title="DC Entertainment Bot",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -127,7 +155,9 @@ app.add_middleware(
 app.state.env = env
 app.state.store = store
 app.state.openrouter = openrouter
-app.state.danbooru = danbooru
+app.state.image_sources = image_sources
+app.state.personas = personas
+app.state.saucenao = saucenao
 app.state.bot_manager = bot_manager
 app.state.health_provider = health_handler
 
@@ -141,3 +171,23 @@ app.include_router(ai_router)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
+
+
+@app.get("/docs", response_class=HTMLResponse)
+async def command_docs_page(request: Request):
+    catalog = get_setting_catalog()
+    commands = catalog["commands"]
+    user_commands = [item for item in commands if item.get("permission", "user") == "user"]
+    admin_commands = [item for item in commands if item.get("permission", "user") == "admin"]
+    return templates.TemplateResponse(
+        "docs.html",
+        {
+            "request": request,
+            "catalog": catalog,
+            "user_commands": user_commands,
+            "admin_commands": admin_commands,
+            "image_profiles": request.app.state.image_sources.list_profiles(),
+            "model_profiles": request.app.state.openrouter.list_providers().get("profiles", {}),
+            "personas": request.app.state.personas.list_profiles(),
+        },
+    )

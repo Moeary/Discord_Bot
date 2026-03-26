@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.models.state import AppState, GuildSettings, GuildStats, TaxCase, UserStats, utcnow
+from app.models.state import AppState, GuildSettings, GuildStats, TaxCase, UserImagePreferences, UserStats, utcnow
 
 
 class StateStore:
@@ -53,6 +53,10 @@ class StateStore:
         guild_stats = self._state.stats.setdefault(str(guild_id), GuildStats())
         return guild_stats.user_stats.setdefault(str(user_id), UserStats())
 
+    def _ensure_user_preferences(self, guild_id: int, user_id: int) -> UserImagePreferences:
+        guild_preferences = self._state.user_preferences.setdefault(str(guild_id), {})
+        return guild_preferences.setdefault(str(user_id), UserImagePreferences())
+
     async def get_snapshot(self) -> AppState:
         await self.load()
         async with self._lock:
@@ -99,6 +103,26 @@ class StateStore:
             stats = self._ensure_user_stats(guild_id, user_id)
             setattr(stats, field_name, getattr(stats, field_name) + amount)
             await self._save_unlocked()
+
+    async def get_user_preferences(self, guild_id: int, user_id: int) -> UserImagePreferences:
+        await self.load()
+        async with self._lock:
+            preferences = self._ensure_user_preferences(guild_id, user_id)
+            return preferences.model_copy(deep=True)
+
+    async def update_user_preferences(
+        self,
+        guild_id: int,
+        user_id: int,
+        updates: dict[str, object],
+    ) -> UserImagePreferences:
+        await self.load()
+        async with self._lock:
+            preferences = self._ensure_user_preferences(guild_id, user_id)
+            for key, value in updates.items():
+                setattr(preferences, key, value)
+            await self._save_unlocked()
+            return preferences.model_copy(deep=True)
 
     async def add_tax_case(self, tax_case: TaxCase) -> TaxCase:
         await self.load()

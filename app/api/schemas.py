@@ -34,7 +34,7 @@ class SummaryRequest(BaseModel):
 
 
 class DrawRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     model: str | None = None
     profile: str | None = None
     fallback_profiles: str | None = None

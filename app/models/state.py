@@ -21,6 +21,7 @@ class GlobalSettings(BaseModel):
     chat_fallback_profiles: str = ""
     draw_model_profile: str = "legacy-draw"
     draw_fallback_profiles: str = ""
+    persona_profile: str = "glados"
     system_prompt: str = (
         "你现在是 GLaDOS，阿珀切尔科学丰富中心的核心智能。"
         "全程使用中文、第一人称，保持冷静、聪明、傲慢、带一点优雅的毒舌。"
@@ -35,6 +36,8 @@ class GlobalSettings(BaseModel):
         "输出分为三段：发生了什么、关键结论、情绪与烂梗。"
         "默认只总结文字内容，不要编造图片信息；上下文不足就直接说明。"
     )
+    system_prompt_override: str = ""
+    summary_system_prompt_override: str = ""
     max_chat_history: int = 12
 
 
@@ -51,6 +54,10 @@ class GuildSettings(BaseModel):
     mute_hours: int = 1
     summary_limit: int = 40
     danbooru_default_tags: str = "rating:safe"
+    safe_image_site_profile: str = "danbooru"
+    explicit_image_site_profile: str = "danbooru"
+    safe_image_default_tags: str = ""
+    explicit_image_default_tags: str = ""
     warn_text: str = (
         "{user_mention} 你的图片被鉴定为屎，请在 {tax_channel} "
         "{minutes} 分钟内补税 {required_images} 张图，否则禁言 {mute_hours} 小时。"
@@ -66,6 +73,13 @@ class UserStats(BaseModel):
     fortune_calls: int = 0
     roulette_calls: int = 0
     lottery_calls: int = 0
+
+
+class UserImagePreferences(BaseModel):
+    safe_image_site_profile: str = ""
+    explicit_image_site_profile: str = ""
+    safe_image_tags: str = ""
+    explicit_image_tags: str = ""
 
 
 class GuildStats(BaseModel):
@@ -92,4 +106,5 @@ class AppState(BaseModel):
     global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
     guilds: dict[str, GuildSettings] = Field(default_factory=dict)
     stats: dict[str, GuildStats] = Field(default_factory=dict)
+    user_preferences: dict[str, dict[str, UserImagePreferences]] = Field(default_factory=dict)
     tax_cases: list[TaxCase] = Field(default_factory=list)

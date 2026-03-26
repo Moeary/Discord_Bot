@@ -17,6 +17,10 @@
   - Discord 命令：`/fun danbooru`
   - Danbooru 登录信息从环境变量读取
   - NSFW 频道默认 `rating:e`，非 NSFW 频道强制 `rating:s`
+- `图站档案与用户偏好`
+  - 支持 `danbooru` / `rule34`
+  - 支持为美图和涩图分别设置默认图站与默认 tag
+  - 支持 `@机器人 来张美图` / `@机器人 来张色图`
 - `搬屎交税`
   - 别人给带图消息点到配置的 `shit` emoji 时，触发警告
   - 管理员回复某条带图消息 `税` / `交税` / `补税` 也可手动触发
@@ -53,6 +57,7 @@ DISCORD_TOKEN=你的机器人 token
 DISCORD_TEST_GUILD_ID=测试服务器 ID，可选
 
 AI_PROVIDER_FILE=data/providers.json
+PERSONA_FILE=data/personas.json
 GRSAI_BASE_URL=https://grsaiapi.com/v1
 GRSAI_DRAW_BASE_URL=https://grsaiapi.com/v1
 GRSAI_API_KEY=你的 grsai 聊天 key
@@ -70,12 +75,17 @@ CUSTOM_DRAW_API_KEY=可选的自定义绘图 key
 
 DANBOORU_USERNAME=你的 danbooru 用户名
 DANBOORU_API_KEY=你的 danbooru api key
+RULE34_API_BASE_URL=https://api.rule34.xxx
+RULE34_POST_BASE_URL=https://rule34.xxx
+SAUCENAO_BASE_URL=https://saucenao.com/search.php
+SAUCENAO_API_KEY=你的 SauceNAO key
 ```
 
 说明：
 
 - `.env` 现在只建议存放 URL、token、api key 这类环境信息。
 - `data/providers.json` 负责声明“渠道”和“模型档案”，每个档案会绑定 `type / provider / adapter / model`。
+- `data/personas.json` 负责声明“机器人人设档案”，包括 system prompt、summary prompt 和 fun 文案。
 - 聊天目前统一按 `OpenAI 兼容 /chat/completions` 走；绘图目前支持 `grsai_draw_completions` 和 `grsai_draw_nano_banana` 两种适配器。
 - `state.json` 只负责记录当前选中的 `chat_model_profile / draw_model_profile` 和群设置。
 - 老配置仍然兼容，默认会自动映射到 `legacy-chat / legacy-draw`。
@@ -125,8 +135,10 @@ uvicorn app.main:app --reload
 ### 面板与状态
 
 - `GET /dashboard`
+- `GET /docs`
 - `GET /api/health`
 - `GET /api/dashboard`
+- `GET /api/docs`
 
 ### AI
 
@@ -153,11 +165,21 @@ uvicorn app.main:app --reload
 
 - `/ai chat prompt:<内容> image:<可选图片> profile:<可选档案>`
 - `/ai summary limit:<消息数>`
-- `/ai draw prompt:<描述> profile:<可选档案> model:<可选覆盖> size:<可选> variants:<1|2>`
+- `/ai draw prompt:<可留空> image:<可选图片> profile:<可选档案> model:<可选覆盖> size:<可选> variants:<1|2>`
+- `/ai image`
 
 ### 娱乐
 
+- `/fun image style:<safe|explicit> tags:<可选> profile:<可选图站档案>`
 - `/fun danbooru tags:<标签>`
+- `/fun rule34 tags:<标签>`
+- `/fun pretty tags:<可选> profile:<可选图站档案>`
+- `/fun lewd tags:<可选> profile:<可选图站档案>`
+- `/fun image_prefs`
+- `/fun image_source style:<safe|explicit> profile:<档案>`
+- `/fun image_tags style:<safe|explicit> tags:<标签>`
+- `/fun image_sites`
+- `/fun sauce image:<可选图片> url:<可选图片链接>`
 - `/fun fortune`
 - `/fun roulette`
 - `/fun coin`
@@ -166,6 +188,9 @@ uvicorn app.main:app --reload
 - `/fun waifu`
 - `/fun lottery`
 - `/fun ship`
+- `/fun diagnose`
+- `/fun rate`
+- `/fun duel`
 - `/fun leaderboard`
 
 ### 配置
@@ -184,6 +209,9 @@ uvicorn app.main:app --reload
 - `chat_fallback_profiles`
 - `draw_model_profile`
 - `draw_fallback_profiles`
+- `persona_profile`
+- `system_prompt_override`
+- `summary_system_prompt_override`
 - `system_prompt`
 - `summary_system_prompt`
 - `max_chat_history`
@@ -201,6 +229,10 @@ uvicorn app.main:app --reload
 - `mute_hours`
 - `summary_limit`
 - `danbooru_default_tags`
+- `safe_image_site_profile`
+- `explicit_image_site_profile`
+- `safe_image_default_tags`
+- `explicit_image_default_tags`
 - `warn_text`
 
 ## `warn_text` 可用占位符
@@ -217,7 +249,9 @@ uvicorn app.main:app --reload
 - 回复机器人消息会自动触发 AI 对话，并携带上一条 AI 回复与当前用户回复作为上下文。
 - 直接 `@机器人` 说话也会触发 AI，对回复某条消息的场景会优先理解那条被回复的消息。
 - `/ai chat` 和 `@机器人` 对话支持读图；`/ai summary` 默认只总结文字，不猜图片内容。
+- `/ai draw` 和 `/ai image` 现在支持“只带参考图不写 prompt”的改图模式；右键消息 `GLaDOS 改图` 也能直接对某条图片消息起手。
 - 当主 AI 渠道失败时，会自动尝试 fallback 渠道，并直接把失败原因显示出来。
+- 浏览器里的命令文档在 `/docs`；FastAPI 的 Swagger 被挪到了 `/api/docs`。
 - `搬屎交税` 支持“发图消息 + 点指定 emoji”触发，也支持管理员回复关键字手动触发。
 - 补税逻辑默认只认税务频道里的图片附件和常见图片链接。
 - 如果没有配置 `tax_channel_id`，机器人仍会警告，但你最好尽快配置税务频道。
