@@ -851,30 +851,56 @@ class EntertainmentBot(commands.Bot):
                 )
             await interaction.response.send_message("\n".join(lines))
 
-        @config_group.command(name="view", description="查看本服务器配置")
-        async def config_view(interaction: discord.Interaction) -> None:
+        @config_group.command(name="view", description="查看配置，可选 guild / global / all")
+        @app_commands.describe(scope="guild / global / all，默认 all")
+        async def config_view(interaction: discord.Interaction, scope: str = "all") -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
                 return
-            text = "\n".join(
-                [
-                    f"`ai_enabled`: {guild_settings.ai_enabled}",
-                    f"`fun_enabled`: {guild_settings.fun_enabled}",
-                    f"`tax_enabled`: {guild_settings.tax_enabled}",
-                    f"`tax_channel_id`: {guild_settings.tax_channel_id}",
-                    f"`log_channel_id`: {guild_settings.log_channel_id}",
-                    f"`shit_emoji`: {guild_settings.shit_emoji}",
-                    f"`tax_required_images`: {guild_settings.tax_required_images}",
-                    f"`tax_payment_window_minutes`: {guild_settings.tax_payment_window_minutes}",
-                    f"`mute_hours`: {guild_settings.mute_hours}",
-                    f"`summary_limit`: {guild_settings.summary_limit}",
-                    f"`danbooru_default_tags`: {guild_settings.danbooru_default_tags}",
-                    f"`safe_image_site_profile`: {guild_settings.safe_image_site_profile}",
-                    f"`explicit_image_site_profile`: {guild_settings.explicit_image_site_profile}",
-                    f"`safe_image_default_tags`: {guild_settings.safe_image_default_tags or '-'}",
-                    f"`explicit_image_default_tags`: {guild_settings.explicit_image_default_tags or '-'}",
-                ]
-            )
+            global_settings = await self.store.get_global_settings()
+            normalized_scope = scope.strip().lower()
+            if normalized_scope not in {"all", "guild", "global"}:
+                await interaction.response.send_message("scope 只能是 `guild` / `global` / `all`。", ephemeral=True)
+                return
+            sections: list[str] = []
+            if normalized_scope in {"all", "guild"}:
+                sections.append(
+                    "\n".join(
+                        [
+                            "[Guild]",
+                            f"`ai_enabled`: {guild_settings.ai_enabled}",
+                            f"`fun_enabled`: {guild_settings.fun_enabled}",
+                            f"`tax_enabled`: {guild_settings.tax_enabled}",
+                            f"`tax_channel_id`: {guild_settings.tax_channel_id}",
+                            f"`log_channel_id`: {guild_settings.log_channel_id}",
+                            f"`shit_emoji`: {guild_settings.shit_emoji}",
+                            f"`tax_required_images`: {guild_settings.tax_required_images}",
+                            f"`tax_payment_window_minutes`: {guild_settings.tax_payment_window_minutes}",
+                            f"`mute_hours`: {guild_settings.mute_hours}",
+                            f"`summary_limit`: {guild_settings.summary_limit}",
+                            f"`danbooru_default_tags`: {guild_settings.danbooru_default_tags}",
+                            f"`safe_image_site_profile`: {guild_settings.safe_image_site_profile}",
+                            f"`explicit_image_site_profile`: {guild_settings.explicit_image_site_profile}",
+                            f"`safe_image_default_tags`: {guild_settings.safe_image_default_tags or '-'}",
+                            f"`explicit_image_default_tags`: {guild_settings.explicit_image_default_tags or '-'}",
+                        ]
+                    )
+                )
+            if normalized_scope in {"all", "global"}:
+                sections.append(
+                    "\n".join(
+                        [
+                            "[Global]",
+                            f"`persona_profile`: {getattr(global_settings, 'persona_profile', 'glados')}",
+                            f"`chat_model_profile`: {global_settings.chat_model_profile}",
+                            f"`chat_fallback_profiles`: {global_settings.chat_fallback_profiles or '-'}",
+                            f"`draw_model_profile`: {global_settings.draw_model_profile}",
+                            f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
+                            f"`max_chat_history`: {global_settings.max_chat_history}",
+                        ]
+                    )
+                )
+            text = "\n\n".join(sections)
             await interaction.response.send_message(text, ephemeral=True)
 
         @config_group.command(name="global_view", description="查看全局 AI 配置")
@@ -882,19 +908,7 @@ class EntertainmentBot(commands.Bot):
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
                 return
-            global_settings = await self.store.get_global_settings()
-            text = "\n".join(
-                [
-                    f"`persona_profile`: {getattr(global_settings, 'persona_profile', 'glados')}",
-                    f"`chat_model_profile`: {global_settings.chat_model_profile}",
-                    f"`chat_fallback_profiles`: {global_settings.chat_fallback_profiles or '-'}",
-                    f"`draw_model_profile`: {global_settings.draw_model_profile}",
-                    f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
-                    f"`system_prompt_override`: {getattr(global_settings, 'system_prompt_override', '') or '-'}",
-                    f"`summary_system_prompt_override`: {getattr(global_settings, 'summary_system_prompt_override', '') or '-'}",
-                ]
-            )
-            await interaction.response.send_message(text, ephemeral=True)
+            await config_view(interaction, "global")
 
         @config_group.command(name="global_set", description="修改全局 AI 配置")
         @app_commands.describe(key="全局配置项名", value="配置值")
@@ -902,33 +916,40 @@ class EntertainmentBot(commands.Bot):
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
                 return
-            if key not in GLOBAL_SETTING_SPECS:
-                await interaction.response.send_message(
-                    f"未知全局配置项。可选：{', '.join(GLOBAL_SETTING_SPECS.keys())}",
-                    ephemeral=True,
-                )
-                return
-            try:
-                cast_value = cast_setting_value(GLOBAL_SETTING_SPECS, key, value)
-            except Exception as exc:
-                await interaction.response.send_message(f"配置值不合法：{exc}", ephemeral=True)
-                return
+            await config_set(interaction, key, value, "global")
 
-            settings = await self.store.update_global_settings({key: cast_value})
-            await interaction.response.send_message(
-                f"已更新全局 `{key}` -> `{getattr(settings, key)}`",
-                ephemeral=True,
-            )
-
-        @config_group.command(name="set", description="设置某个配置项")
-        @app_commands.describe(key="配置项名", value="配置值")
-        async def config_set(interaction: discord.Interaction, key: str, value: str) -> None:
+        @config_group.command(name="set", description="设置配置项，可选 guild / global")
+        @app_commands.describe(scope="guild / global，默认 guild", key="配置项名", value="配置值")
+        async def config_set(interaction: discord.Interaction, key: str, value: str, scope: str = "guild") -> None:
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
                 return
+            normalized_scope = scope.strip().lower()
+            if normalized_scope == "global":
+                if key not in GLOBAL_SETTING_SPECS:
+                    await interaction.response.send_message(
+                        f"未知全局配置项。可选：{', '.join(GLOBAL_SETTING_SPECS.keys())}",
+                        ephemeral=True,
+                    )
+                    return
+                try:
+                    cast_value = cast_setting_value(GLOBAL_SETTING_SPECS, key, value)
+                except Exception as exc:
+                    await interaction.response.send_message(f"配置值不合法：{exc}", ephemeral=True)
+                    return
+                settings = await self.store.update_global_settings({key: cast_value})
+                await interaction.response.send_message(
+                    f"已更新全局 `{key}` -> `{getattr(settings, key)}`",
+                    ephemeral=True,
+                )
+                return
+
+            if normalized_scope != "guild":
+                await interaction.response.send_message("scope 只能是 `guild` 或 `global`。", ephemeral=True)
+                return
             if key not in GUILD_SETTING_SPECS:
                 await interaction.response.send_message(
-                    f"未知配置项。可选：{', '.join(GUILD_SETTING_SPECS.keys())}",
+                    f"未知服务器配置项。可选：{', '.join(GUILD_SETTING_SPECS.keys())}",
                     ephemeral=True,
                 )
                 return
@@ -1067,15 +1088,11 @@ class EntertainmentBot(commands.Bot):
 
     def _resolve_system_prompt(self, global_settings) -> str:
         persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
-        override = getattr(global_settings, "system_prompt_override", "").strip()
-        legacy = getattr(global_settings, "system_prompt", "").strip()
-        return override or str(persona.get("system_prompt", "")).strip() or legacy
+        return str(persona.get("system_prompt", "")).strip()
 
     def _resolve_summary_prompt(self, global_settings) -> str:
         persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
-        override = getattr(global_settings, "summary_system_prompt_override", "").strip()
-        legacy = getattr(global_settings, "summary_system_prompt", "").strip()
-        return override or str(persona.get("summary_system_prompt", "")).strip() or legacy
+        return str(persona.get("summary_system_prompt", "")).strip()
 
     def _compose_ai_system_prompt(self, base_prompt: str, global_settings) -> str:
         persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))

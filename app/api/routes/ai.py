@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
     store = request.app.state.store
     global_settings = await store.get_global_settings()
-    system_prompt = payload.system_prompt or _resolve_system_prompt(request, global_settings)
+    system_prompt = _resolve_system_prompt(request, global_settings)
     user_content: str | list[dict[str, object]] = payload.prompt
     if payload.image_urls:
         user_content = [{"type": "text", "text": payload.prompt}]
@@ -101,13 +101,9 @@ def _describe_error(exc: Exception) -> str:
 
 def _resolve_system_prompt(request: Request, global_settings) -> str:
     persona = request.app.state.personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
-    override = getattr(global_settings, "system_prompt_override", "").strip()
-    legacy = getattr(global_settings, "system_prompt", "").strip()
-    return override or str(persona.get("system_prompt", "")).strip() or legacy
+    return str(persona.get("system_prompt", "")).strip()
 
 
 def _resolve_summary_prompt(request: Request, global_settings) -> str:
     persona = request.app.state.personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
-    override = getattr(global_settings, "summary_system_prompt_override", "").strip()
-    legacy = getattr(global_settings, "summary_system_prompt", "").strip()
-    return override or str(persona.get("summary_system_prompt", "")).strip() or legacy
+    return str(persona.get("summary_system_prompt", "")).strip()

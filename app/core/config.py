@@ -50,6 +50,8 @@ class EnvSettings(BaseSettings):
         default="https://rule34.xxx",
         alias="RULE34_POST_BASE_URL",
     )
+    rule34_user_id: str | None = Field(default=None, alias="RULE34_USER_ID")
+    rule34_api_key: str | None = Field(default=None, alias="RULE34_API_KEY")
     saucenao_base_url: str = Field(
         default="https://saucenao.com/search.php",
         alias="SAUCENAO_BASE_URL",

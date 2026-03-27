@@ -22,6 +22,7 @@ class ImageSiteSpec:
     adapter: str
     base_url: str
     post_base_url: str
+    user_id: str | None = None
     username: str | None = None
     api_key: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -119,6 +120,8 @@ class ImageSourceRouter:
                 adapter="rule34",
                 base_url=self.env.rule34_api_base_url.rstrip("/"),
                 post_base_url=self.env.rule34_post_base_url.rstrip("/"),
+                user_id=self.env.rule34_user_id,
+                api_key=self.env.rule34_api_key,
                 headers={"User-Agent": USER_AGENT},
             ),
         }
@@ -157,6 +160,7 @@ class ImageSourceRouter:
             adapter=adapter,
             base_url=base_url.rstrip("/"),
             post_base_url=post_base_url.rstrip("/"),
+            user_id=self._resolve_value(payload, "user_id"),
             username=self._resolve_value(payload, "username"),
             api_key=self._resolve_value(payload, "api_key"),
             headers=headers,
@@ -267,6 +271,8 @@ class ImageSourceRouter:
     ) -> dict[str, Any]:
         if rating_mode != "explicit":
             raise RuntimeError("Rule34 目前只开放给涩图模式。")
+        if not site.user_id or not site.api_key:
+            raise RuntimeError("RULE34_USER_ID / RULE34_API_KEY 未配置。")
 
         query_tags = self._strip_rating_tags(tags)
         async with httpx.AsyncClient(headers=site.headers, timeout=30.0) as client:
@@ -278,6 +284,8 @@ class ImageSourceRouter:
                     "q": "index",
                     "json": 1,
                     "limit": 100,
+                    "user_id": site.user_id,
+                    "api_key": site.api_key,
                     "tags": query_tags or None,
                 },
             )

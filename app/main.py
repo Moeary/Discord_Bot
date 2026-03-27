@@ -67,20 +67,6 @@ async def lifespan(app: FastAPI):
         migrated_draw_fallbacks = _migrate_draw_fallbacks(global_settings)
         if migrated_draw_fallbacks:
             updates["draw_fallback_profiles"] = migrated_draw_fallbacks
-    persona = personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
-    if (
-        not getattr(global_settings, "system_prompt_override", "").strip()
-        and getattr(global_settings, "system_prompt", "").strip()
-        and getattr(global_settings, "system_prompt", "").strip() != str(persona.get("system_prompt", "")).strip()
-    ):
-        updates["system_prompt_override"] = getattr(global_settings, "system_prompt", "").strip()
-    if (
-        not getattr(global_settings, "summary_system_prompt_override", "").strip()
-        and getattr(global_settings, "summary_system_prompt", "").strip()
-        and getattr(global_settings, "summary_system_prompt", "").strip()
-        != str(persona.get("summary_system_prompt", "")).strip()
-    ):
-        updates["summary_system_prompt_override"] = getattr(global_settings, "summary_system_prompt", "").strip()
     if updates:
         await store.update_global_settings(updates)
     await bot_manager.start()

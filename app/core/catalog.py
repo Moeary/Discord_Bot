@@ -24,22 +24,6 @@ GLOBAL_SETTING_SPECS = {
         "type": "str",
         "description": "当前机器人人设档案名，对应 personas.json 里的 profile。",
     },
-    "system_prompt": {
-        "type": "str",
-        "description": "兼容旧配置的系统提示词字段，建议改用 persona_profile 或 system_prompt_override。",
-    },
-    "summary_system_prompt": {
-        "type": "str",
-        "description": "兼容旧配置的总结提示词字段，建议改用 persona_profile 或 summary_system_prompt_override。",
-    },
-    "system_prompt_override": {
-        "type": "str",
-        "description": "对当前 persona 的聊天系统提示词做覆盖。",
-    },
-    "summary_system_prompt_override": {
-        "type": "str",
-        "description": "对当前 persona 的总结系统提示词做覆盖。",
-    },
     "max_chat_history": {
         "type": "int",
         "description": "AI 对话带入上下文的最大消息条数。",
@@ -101,7 +85,7 @@ COMMAND_REFERENCE = [
     {
         "group": "ai",
         "name": "/ai chat",
-        "description": "调用 OpenRouter 模型聊天，支持可选图片输入。",
+        "description": "调用当前聊天档案与人设聊天，支持可选图片输入。",
         "permission": "user",
         "entrypoints": ["slash", "@bot", "reply"],
     },
@@ -283,28 +267,28 @@ COMMAND_REFERENCE = [
     {
         "group": "config",
         "name": "/config view",
-        "description": "查看当前服务器配置。",
+        "description": "查看当前配置，可选 scope: guild / global / all。",
         "permission": "admin",
         "entrypoints": ["slash"],
     },
     {
         "group": "config",
         "name": "/config global_view",
-        "description": "查看全局 AI 档案和模型配置。",
+        "description": "兼容旧入口，等价于 /config view scope:global。",
         "permission": "admin",
         "entrypoints": ["slash"],
     },
     {
         "group": "config",
         "name": "/config set",
-        "description": "外部命令修改服务器设置。",
+        "description": "修改配置，可选 scope: guild / global。",
         "permission": "admin",
         "entrypoints": ["slash"],
     },
     {
         "group": "config",
         "name": "/config global_set",
-        "description": "外部命令修改全局 AI 档案设置。",
+        "description": "兼容旧入口，等价于 /config set scope:global。",
         "permission": "admin",
         "entrypoints": ["slash"],
     },

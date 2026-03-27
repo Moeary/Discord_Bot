@@ -11,7 +11,6 @@ class SettingsPatchRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str
-    system_prompt: str | None = None
     model: str | None = None
     profile: str | None = None
     fallback_profiles: str | None = None

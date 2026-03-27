@@ -77,6 +77,8 @@ DANBOORU_USERNAME=你的 danbooru 用户名
 DANBOORU_API_KEY=你的 danbooru api key
 RULE34_API_BASE_URL=https://api.rule34.xxx
 RULE34_POST_BASE_URL=https://rule34.xxx
+RULE34_USER_ID=你的 rule34 用户 id
+RULE34_API_KEY=你的 rule34 api key
 SAUCENAO_BASE_URL=https://saucenao.com/search.php
 SAUCENAO_API_KEY=你的 SauceNAO key
 ```
@@ -195,11 +197,14 @@ uvicorn app.main:app --reload
 
 ### 配置
 
-- `/config view`
-- `/config global_view`
-- `/config set key:<配置项> value:<值>`
-- `/config global_set key:<配置项> value:<值>`
+- `/config view scope:<guild|global|all>`
+- `/config set key:<配置项> value:<值> scope:<guild|global>`
 - `/config tax_channel channel:<频道>`
+
+兼容旧入口仍保留：
+
+- `/config global_view`
+- `/config global_set key:<配置项> value:<值>`
 
 ## 可调整配置项
 
@@ -210,10 +215,6 @@ uvicorn app.main:app --reload
 - `draw_model_profile`
 - `draw_fallback_profiles`
 - `persona_profile`
-- `system_prompt_override`
-- `summary_system_prompt_override`
-- `system_prompt`
-- `summary_system_prompt`
 - `max_chat_history`
 
 ### 服务器配置
@@ -243,9 +244,27 @@ uvicorn app.main:app --reload
 - `{required_images}`
 - `{mute_hours}`
 
+## Rule34 凭据怎么拿
+
+Rule34 现在的 API 访问需要 `user_id + api_key`。代码已经按这个格式接好了，你只要把它们填进 `.env` 里的 `RULE34_USER_ID` 和 `RULE34_API_KEY`。
+
+建议流程：
+
+1. 注册并登录 [rule34.xxx](https://rule34.xxx)。
+2. 打开账号设置页：[https://rule34.xxx/index.php?page=account&s=options](https://rule34.xxx/index.php?page=account&s=options)
+3. 找到 `API Access Credentials`。
+4. 如果还没看到 key，就勾 `Generate New Key?` 然后保存。
+5. 长字符串是 `api_key`，短数字是 `user_id`。
+6. 分别填进项目 `.env`。
+
+我参考了这些资料来核对当前流程：
+- [rule34Py: How to set Rule34 api credentials](https://b3yc0d3.github.io/rule34Py/guides/api-credentials.html)
+- [Rule34 API](https://api.rule34.xxx/)
+
 ## 备注
 
-- AI 默认系统提示词和总结提示词为 GLaDOS 风格，可在面板里改。
+- AI 的系统提示词和总结提示词现在完全来自 `data/personas.json` 里的当前 `persona_profile`。
+- 你后面如果要切 RP，只要新增 persona，然后把 `persona_profile` 切过去就行。
 - 回复机器人消息会自动触发 AI 对话，并携带上一条 AI 回复与当前用户回复作为上下文。
 - 直接 `@机器人` 说话也会触发 AI，对回复某条消息的场景会优先理解那条被回复的消息。
 - `/ai chat` 和 `@机器人` 对话支持读图；`/ai summary` 默认只总结文字，不猜图片内容。

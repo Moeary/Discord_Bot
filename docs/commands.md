@@ -63,13 +63,13 @@
 ## 管理员
 
 - `/config view`
-  - 查看当前服务器配置。
+  - 统一查看配置，推荐配合 `scope:guild` / `scope:global` / `scope:all`。
 - `/config set`
-  - 修改服务器配置。
+  - 统一修改配置，推荐配合 `scope:guild` / `scope:global`。
 - `/config global_view`
-  - 查看全局模型档案配置。
+  - 兼容旧入口，等价于 `/config view scope:global`。
 - `/config global_set`
-  - 修改全局模型档案配置。
+  - 兼容旧入口，等价于 `/config set scope:global`。
 - `/config tax_channel`
   - 设置税务频道。
 

@@ -86,9 +86,10 @@ class FunService:
         now = now or datetime.utcnow()
         seed = f"{guild_id}:{user_id}:{now:%Y-%m-%d}"
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-        score = int(digest[:8], 16) % 101
         fortune_text = FunService._list(config, "fortune_text", DEFAULT_FORTUNE_TEXT)
-        text = fortune_text[min(score // 17, len(fortune_text) - 1)]
+        index = int(digest[:8], 16) % len(fortune_text)
+        score = max(60, 100 - index * max(8, 36 // max(len(fortune_text), 1)))
+        text = fortune_text[index]
         return {"score": score, "text": text}
 
     @staticmethod

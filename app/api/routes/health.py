@@ -21,7 +21,7 @@ async def health(request: Request) -> dict[str, object]:
         "openrouter_configured": bool(env.openrouter_api_key),
         "grsai_configured": bool(os.getenv("GRSAI_API_KEY") or env.openrouter_api_key),
         "danbooru_configured": bool(env.danbooru_username and env.danbooru_api_key),
-        "rule34_configured": bool(env.rule34_api_base_url and env.rule34_post_base_url),
+        "rule34_configured": bool(env.rule34_api_base_url and env.rule34_post_base_url and env.rule34_user_id and env.rule34_api_key),
         "saucenao_configured": bool(env.saucenao_api_key),
         "provider_file": str(env.ai_provider_file),
         "persona_file": str(env.persona_file),
