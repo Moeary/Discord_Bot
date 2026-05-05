@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 
@@ -35,6 +36,19 @@ GUILD_SETTING_SPECS = {
     "ai_enabled": {"type": "bool", "description": "是否启用 AI 功能。"},
     "fun_enabled": {"type": "bool", "description": "是否启用娱乐功能。"},
     "tax_enabled": {"type": "bool", "description": "是否启用搬屎交税。"},
+    "welcome_channel_id": {"type": "int_optional", "description": "欢迎频道 ID，也支持直接传 `<#频道>`。"},
+    "welcome_text": {
+        "type": "str",
+        "description": "欢迎文案，可用 `{user_mention}` 和 `{guild_name}` 占位。",
+    },
+    "verification_channel_id": {"type": "int_optional", "description": "答题领身份组的频道 ID，也支持 `<#频道>`。"},
+    "verification_role_id": {"type": "int_optional", "description": "验证成功后发放的身份组 ID，也支持 `<@&身份组>`。"},
+    "verification_question": {"type": "str", "description": "入群答题问题文本。"},
+    "verification_answer": {"type": "str", "description": "入群答题正确答案。"},
+    "verification_success_text": {
+        "type": "str",
+        "description": "验证成功提示，可用 `{user_mention}` 和 `{role_mention}`。",
+    },
     "tax_channel_id": {"type": "int_optional", "description": "税务频道 ID。"},
     "log_channel_id": {"type": "int_optional", "description": "日志频道 ID。"},
     "shit_emoji": {
@@ -102,13 +116,6 @@ COMMAND_REFERENCE = [
         "description": "调用绘图接口生成图片或参考图改图。",
         "permission": "user",
         "entrypoints": ["slash", "@bot", "reply"],
-    },
-    {
-        "group": "ai",
-        "name": "/ai image",
-        "description": "AI 绘图别名命令。",
-        "permission": "user",
-        "entrypoints": ["slash"],
     },
     {
         "group": "fun",
@@ -189,22 +196,8 @@ COMMAND_REFERENCE = [
     },
     {
         "group": "fun",
-        "name": "/fun roulette",
-        "description": "进行一次毫无必要的轮盘实验。",
-        "permission": "user",
-        "entrypoints": ["slash", "@bot", "reply"],
-    },
-    {
-        "group": "fun",
         "name": "/fun coin",
         "description": "把选择权外包给一枚硬币。",
-        "permission": "user",
-        "entrypoints": ["slash", "@bot", "reply"],
-    },
-    {
-        "group": "fun",
-        "name": "/fun choose",
-        "description": "让系统替你做一个懒惰但有效的选择。",
         "permission": "user",
         "entrypoints": ["slash", "@bot", "reply"],
     },
@@ -218,7 +211,7 @@ COMMAND_REFERENCE = [
     {
         "group": "fun",
         "name": "/fun waifu",
-        "description": "抽取你今天的危险情感投射对象。",
+        "description": "抽取你今天的 safe 二次元老婆图。",
         "permission": "user",
         "entrypoints": ["slash", "@bot", "reply"],
     },
@@ -231,31 +224,10 @@ COMMAND_REFERENCE = [
     },
     {
         "group": "fun",
-        "name": "/fun lottery",
-        "description": "领取今日签运和廉价命运解读。",
-        "permission": "user",
-        "entrypoints": ["slash", "@bot", "reply"],
-    },
-    {
-        "group": "fun",
         "name": "/fun ship",
         "description": "测量两名测试对象的电波同步率。",
         "permission": "user",
         "entrypoints": ["slash"],
-    },
-    {
-        "group": "fun",
-        "name": "/fun diagnose",
-        "description": "对某个对象做一次情绪稳定性诊断。",
-        "permission": "user",
-        "entrypoints": ["slash", "@bot", "reply"],
-    },
-    {
-        "group": "fun",
-        "name": "/fun rate",
-        "description": "让系统对某个东西打分。",
-        "permission": "user",
-        "entrypoints": ["slash", "@bot", "reply"],
     },
     {
         "group": "fun",
@@ -264,41 +236,8 @@ COMMAND_REFERENCE = [
         "permission": "user",
         "entrypoints": ["slash"],
     },
-    {
-        "group": "config",
-        "name": "/config view",
-        "description": "查看当前配置，可选 scope: guild / global / all。",
-        "permission": "admin",
-        "entrypoints": ["slash"],
-    },
-    {
-        "group": "config",
-        "name": "/config global_view",
-        "description": "兼容旧入口，等价于 /config view scope:global。",
-        "permission": "admin",
-        "entrypoints": ["slash"],
-    },
-    {
-        "group": "config",
-        "name": "/config set",
-        "description": "修改配置，可选 scope: guild / global。",
-        "permission": "admin",
-        "entrypoints": ["slash"],
-    },
-    {
-        "group": "config",
-        "name": "/config global_set",
-        "description": "兼容旧入口，等价于 /config set scope:global。",
-        "permission": "admin",
-        "entrypoints": ["slash"],
-    },
-    {
-        "group": "config",
-        "name": "/config tax_channel",
-        "description": "直接指定税务频道。",
-        "permission": "admin",
-        "entrypoints": ["slash"],
-    },
+    {"group": "config", "name": "/config view", "description": "查看当前服务器和全局配置。", "permission": "admin", "entrypoints": ["slash"]},
+    {"group": "config", "name": "/config set", "description": "按配置项名自动修改服务器或全局配置。", "permission": "admin", "entrypoints": ["slash"]},
 ]
 
 
@@ -310,7 +249,7 @@ def cast_setting_value(specs: dict[str, dict[str, str]], key: str, value: object
     if value_type == "str":
         return str(value)
     if value_type == "int":
-        return int(value)
+        return _parse_int_like(value)
     if value_type == "bool":
         if isinstance(value, bool):
             return value
@@ -323,8 +262,18 @@ def cast_setting_value(specs: dict[str, dict[str, str]], key: str, value: object
     if value_type == "int_optional":
         if value in {None, "", "none", "null", "off"}:
             return None
-        return int(value)
+        return _parse_int_like(value)
     return value
+
+
+def _parse_int_like(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    match = re.search(r"\d+", text)
+    if not match:
+        raise ValueError(f"Cannot cast {value!r} to int")
+    return int(match.group(0))
 
 
 def get_setting_catalog() -> dict[str, object]:

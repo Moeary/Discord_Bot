@@ -30,6 +30,13 @@ class GuildSettings(BaseModel):
     ai_enabled: bool = True
     fun_enabled: bool = True
     tax_enabled: bool = True
+    welcome_channel_id: int | None = None
+    welcome_text: str = "{user_mention} 欢迎来到 {guild_name}。请别立刻把这里炸了。"
+    verification_channel_id: int | None = None
+    verification_role_id: int | None = None
+    verification_question: str = "Minecraft的中文译名是什么"
+    verification_answer: str = "我的世界"
+    verification_success_text: str = "{user_mention} 验证通过，已领取身份组 {role_mention}。"
     tax_channel_id: int | None = None
     log_channel_id: int | None = None
     shit_emoji: str = "shit,💩,poop,pile_of_poo"
@@ -55,8 +62,6 @@ class UserStats(BaseModel):
     ai_calls: int = 0
     danbooru_calls: int = 0
     fortune_calls: int = 0
-    roulette_calls: int = 0
-    lottery_calls: int = 0
 
 
 class UserImagePreferences(BaseModel):

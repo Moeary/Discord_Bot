@@ -12,8 +12,6 @@
   - 总结当前频道最近聊天。
 - `/ai draw`
   - AI 绘图或改图；可以只带图不写 prompt。
-- `/ai image`
-  - `/ai draw` 别名。
 - `@GLaDOS ...`
   - 直接聊天、要图、整活。
 - `回复 GLaDOS ...`
@@ -48,30 +46,45 @@
 - `消息右键 -> GLaDOS 搜图`
   - 对某条图片消息直接反查来源。
 - `/fun fortune`
-- `/fun roulette`
 - `/fun coin`
-- `/fun choose`
 - `/fun eightball`
 - `/fun waifu`
-- `/fun lottery`
+  - 抽今天的 safe 二次元老婆图，并尽量带出作品和角色名。
 - `/fun ship`
-- `/fun diagnose`
-- `/fun rate`
 - `/fun duel`
 - `/fun leaderboard`
+
+### 不用 Slash 也能做的事
+
+- `@GLaDOS 你好`
+  - 直接聊天。
+- `回复 GLaDOS 继续`
+  - 接着上一轮继续聊。
+- `@GLaDOS draw 一只猫娘`
+  - 直接触发绘图。
+- `回复一张图 @GLaDOS 改图，换成赛博风`
+  - 直接改图。
+- `@GLaDOS 来张美图`
+  - 抽安全图。
+- `@GLaDOS 来张色图`
+  - 抽涩图，仅限 NSFW 频道。
+- `@GLaDOS 搜图`
+  - 带图或回复图片消息反查来源。
+- `@GLaDOS 今日运势`
+  - 直接看运势。
+- `@GLaDOS 抛硬币`
+  - 直接抛硬币。
+- `@GLaDOS 8ball 我今天该不该熬夜`
+  - 直接问八球。
+- `@GLaDOS 老婆`
+  - 直接抽今日 safe 二次元老婆。
 
 ## 管理员
 
 - `/config view`
-  - 统一查看配置，推荐配合 `scope:guild` / `scope:global` / `scope:all`。
+  - 一次看完当前服务器配置和全局配置。
 - `/config set`
-  - 统一修改配置，推荐配合 `scope:guild` / `scope:global`。
-- `/config global_view`
-  - 兼容旧入口，等价于 `/config view scope:global`。
-- `/config global_set`
-  - 兼容旧入口，等价于 `/config set scope:global`。
-- `/config tax_channel`
-  - 设置税务频道。
+  - 按 key 自动修改服务器或全局配置，不再需要手填 scope。
 
 ## 图站档案约定
 

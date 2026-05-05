@@ -28,9 +28,11 @@
   - 超时未交税自动禁言 1 小时
 - `其他娱乐功能`
   - `/fun fortune` 今日运势
-  - `/fun roulette` 轮盘
-  - `/fun waifu` 今日老婆/老公（同一天每个用户结果不同）
-  - `/fun lottery` 每日抽签
+  - `/fun coin` 抛硬币
+  - `/fun eightball` 是非题
+  - `/fun waifu` 今日老婆/老公（safe 二次元角色图）
+  - 欢迎消息
+  - 答题自助身份组
   - `/fun leaderboard` 榜单
 - `可视化面板`
   - `GET /dashboard`
@@ -168,7 +170,6 @@ uvicorn app.main:app --reload
 - `/ai chat prompt:<内容> image:<可选图片> profile:<可选档案>`
 - `/ai summary limit:<消息数>`
 - `/ai draw prompt:<可留空> image:<可选图片> profile:<可选档案> model:<可选覆盖> size:<可选> variants:<1|2>`
-- `/ai image`
 
 ### 娱乐
 
@@ -183,28 +184,17 @@ uvicorn app.main:app --reload
 - `/fun image_sites`
 - `/fun sauce image:<可选图片> url:<可选图片链接>`
 - `/fun fortune`
-- `/fun roulette`
 - `/fun coin`
-- `/fun choose`
 - `/fun eightball`
 - `/fun waifu`
-- `/fun lottery`
 - `/fun ship`
-- `/fun diagnose`
-- `/fun rate`
 - `/fun duel`
 - `/fun leaderboard`
 
 ### 配置
 
-- `/config view scope:<guild|global|all>`
-- `/config set key:<配置项> value:<值> scope:<guild|global>`
-- `/config tax_channel channel:<频道>`
-
-兼容旧入口仍保留：
-
-- `/config global_view`
-- `/config global_set key:<配置项> value:<值>`
+- `/config view`
+- `/config set key:<配置项> value:<值>`
 
 ## 可调整配置项
 
@@ -222,6 +212,13 @@ uvicorn app.main:app --reload
 - `ai_enabled`
 - `fun_enabled`
 - `tax_enabled`
+- `welcome_channel_id`
+- `welcome_text`
+- `verification_channel_id`
+- `verification_role_id`
+- `verification_question`
+- `verification_answer`
+- `verification_success_text`
 - `tax_channel_id`
 - `log_channel_id`
 - `shit_emoji`
@@ -265,10 +262,12 @@ Rule34 现在的 API 访问需要 `user_id + api_key`。代码已经按这个格
 
 - AI 的系统提示词和总结提示词现在完全来自 `data/personas.json` 里的当前 `persona_profile`。
 - 你后面如果要切 RP，只要新增 persona，然后把 `persona_profile` 切过去就行。
+- `/config set` 现在会按 key 自动判断写入 guild 还是 global，不用再手填 `scope`。
 - 回复机器人消息会自动触发 AI 对话，并携带上一条 AI 回复与当前用户回复作为上下文。
 - 直接 `@机器人` 说话也会触发 AI，对回复某条消息的场景会优先理解那条被回复的消息。
 - `/ai chat` 和 `@机器人` 对话支持读图；`/ai summary` 默认只总结文字，不猜图片内容。
-- `/ai draw` 和 `/ai image` 现在支持“只带参考图不写 prompt”的改图模式；右键消息 `GLaDOS 改图` 也能直接对某条图片消息起手。
+- `/ai draw` 现在支持“只带参考图不写 prompt”的改图模式；右键消息 `GLaDOS 改图` 也能直接对某条图片消息起手。
+- 不用 slash 的情况下，也可以直接 `@机器人` 或回复机器人来聊天、绘图、改图、搜图、来张美图/色图、看运势、抛硬币、问 8ball、抽老婆。
 - 当主 AI 渠道失败时，会自动尝试 fallback 渠道，并直接把失败原因显示出来。
 - 浏览器里的命令文档在 `/docs`；FastAPI 的 Swagger 被挪到了 `/api/docs`。
 - `搬屎交税` 支持“发图消息 + 点指定 emoji”触发，也支持管理员回复关键字手动触发。

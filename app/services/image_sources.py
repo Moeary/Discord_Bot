@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -50,6 +51,7 @@ class ImageSourceRouter:
         rating_mode: str,
         base_tags: str = "",
         extra_tags: str = "",
+        selection_key: str | None = None,
     ) -> dict[str, Any]:
         sites, profiles = self._load_registry()
         profile_spec = profiles.get(profile)
@@ -66,10 +68,56 @@ class ImageSourceRouter:
 
         merged_tags = self._merge_tags(base_tags, extra_tags)
         if site_spec.adapter == "danbooru":
-            return await self._random_danbooru_post(site_spec, merged_tags, rating_mode)
+            return await self._random_danbooru_post(site_spec, merged_tags, rating_mode, selection_key=selection_key)
         if site_spec.adapter == "rule34":
-            return await self._random_rule34_post(site_spec, merged_tags, rating_mode)
+            return await self._random_rule34_post(site_spec, merged_tags, rating_mode, selection_key=selection_key)
         raise RuntimeError(f"不支持的图站适配器 `{site_spec.adapter}`。")
+
+    async def character_post(
+        self,
+        *,
+        profile: str = "danbooru",
+        rating_mode: str = "safe",
+    ) -> dict[str, Any]:
+        sites, profiles = self._load_registry()
+        profile_spec = profiles.get(profile)
+        if profile_spec is None:
+            raise RuntimeError(f"未找到图站档案 `{profile}`。")
+        site_spec = sites.get(profile_spec.site)
+        if site_spec is None:
+            raise RuntimeError(f"图站 `{profile_spec.site}` 不存在。")
+        if site_spec.adapter != "danbooru":
+            raise RuntimeError("当前只有 Danbooru 档案支持角色向 safe 抽图。")
+        if not site_spec.username or not site_spec.api_key:
+            raise RuntimeError("DANBOORU_USERNAME / DANBOORU_API_KEY 未配置。")
+        if rating_mode != "safe":
+            raise RuntimeError("当前角色抽图只支持 safe 模式。")
+
+        auth = (site_spec.username, site_spec.api_key)
+        async with httpx.AsyncClient(auth=auth, headers=site_spec.headers, timeout=30.0) as client:
+            for _ in range(6):
+                response = await client.get(
+                    f"{site_spec.base_url}/posts.json",
+                    params={"limit": 50, "tags": "rating:s order:random"},
+                )
+                if response.is_error:
+                    raise RuntimeError(self._format_http_error("Danbooru", response))
+                payload = response.json()
+                if not isinstance(payload, list) or not payload:
+                    continue
+                candidates = [
+                    item
+                    for item in payload
+                    if isinstance(item, dict)
+                    and item.get("file_url")
+                    and "1girl" in str(item.get("tag_string", "")).split()
+                    and str(item.get("tag_string_character", "")).strip()
+                    and str(item.get("tag_string_copyright", "")).strip()
+                ]
+                if candidates:
+                    return self._normalize_danbooru_post(site_spec, random.choice(candidates))
+
+        raise RuntimeError("Danbooru 没找到带角色和作品信息的 safe 图片。")
 
     def list_profiles(self) -> dict[str, dict[str, object]]:
         sites, profiles = self._load_registry()
@@ -231,6 +279,7 @@ class ImageSourceRouter:
         site: ImageSiteSpec,
         tags: str,
         rating_mode: str,
+        selection_key: str | None = None,
     ) -> dict[str, Any]:
         if not site.username or not site.api_key:
             raise RuntimeError("DANBOORU_USERNAME / DANBOORU_API_KEY 未配置。")
@@ -249,7 +298,10 @@ class ImageSourceRouter:
             if randomish_response.is_success:
                 items = randomish_response.json()
                 if items:
-                    return self._normalize_danbooru_post(site, random.choice(items))
+                    return self._normalize_danbooru_post(
+                        site,
+                        self._select_item(items, selection_key),
+                    )
 
             fallback_response = await client.get(
                 f"{site.base_url}/posts.json",
@@ -261,13 +313,14 @@ class ImageSourceRouter:
 
         if not items:
             raise RuntimeError("Danbooru 没有找到符合条件的图片。")
-        return self._normalize_danbooru_post(site, random.choice(items))
+        return self._normalize_danbooru_post(site, self._select_item(items, selection_key))
 
     async def _random_rule34_post(
         self,
         site: ImageSiteSpec,
         tags: str,
         rating_mode: str,
+        selection_key: str | None = None,
     ) -> dict[str, Any]:
         if rating_mode != "explicit":
             raise RuntimeError("Rule34 目前只开放给涩图模式。")
@@ -295,7 +348,17 @@ class ImageSourceRouter:
         items = self._decode_rule34_response(response)
         if not items:
             raise RuntimeError("Rule34 没有找到符合条件的图片。")
-        return self._normalize_rule34_post(site, random.choice(items))
+        return self._normalize_rule34_post(site, self._select_item(items, selection_key))
+
+    @staticmethod
+    def _select_item(items: list[dict[str, Any]], selection_key: str | None = None) -> dict[str, Any]:
+        if not items:
+            raise RuntimeError("没有可用图片结果。")
+        if not selection_key:
+            return random.choice(items)
+        digest = hashlib.sha256(selection_key.encode("utf-8")).hexdigest()
+        index = int(digest[:8], 16) % len(items)
+        return items[index]
 
     @staticmethod
     def _decode_rule34_response(response: httpx.Response) -> list[dict[str, Any]]:
@@ -339,6 +402,8 @@ class ImageSourceRouter:
             "id": post.get("id"),
             "rating": post.get("rating"),
             "tags": post.get("tag_string", ""),
+            "characters": post.get("tag_string_character", ""),
+            "copyrights": post.get("tag_string_copyright", ""),
             "source": post.get("source"),
             "file_url": file_url,
             "post_url": f"{site.post_base_url}/posts/{post.get('id')}",
