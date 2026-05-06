@@ -1,0 +1,9 @@
+enabled: false
+api-base-url: "http://127.0.0.1:8000"
+server-id: "default"
+token: ""
+poll-interval-ticks: 20
+connect-timeout-ms: 3000
+request-timeout-ms: 5000
+max-message-length: 300
+minecraft-message-format: "<%username%> %message%"

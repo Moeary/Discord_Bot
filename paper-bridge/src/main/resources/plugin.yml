@@ -1,0 +1,17 @@
+name: DcBotPaperBridge
+version: ${version}
+main: com.dcbot.paperbridge.DcBotPaperBridgePlugin
+api-version: '1.21'
+author: DC Bot
+description: Bridge Paper chat with the DC Bot FastAPI service.
+commands:
+  dcbotbridge:
+    description: Manage the DC Bot Paper bridge.
+    usage: /dcbotbridge <status|reload|token>
+    permission: dcbotbridge.admin
+    aliases:
+      - dcbot
+permissions:
+  dcbotbridge.admin:
+    description: Allows bridge status and reload commands.
+    default: op

@@ -120,6 +120,30 @@ pixi run dev
 - `pixi run dev`：开发模式启动 FastAPI，读取 `.env` 里的 `HOST` / `PORT`
 - `pixi run start`：普通启动，读取 `.env` 里的 `HOST` / `PORT`
 
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+Docker 容器会读取 `.env`，并把 `./data` 挂载到 `/app/data`。对外部署时建议设置：
+
+```env
+HOST=0.0.0.0
+PORT=8000
+MINECRAFT_TOKEN=强随机 token
+MINECRAFT_ALLOW_NO_TOKEN=false
+MINECRAFT_ALLOWED_CLIENTS=Paper服务器IP或CIDR
+```
+
+如果在 Windows 上通过 WSL2 编译/推送镜像，可以在仓库根目录执行：
+
+```bash
+wsl docker build -t moeary/discord_bot:0.1.0 .
+wsl docker login
+wsl docker push moeary/discord_bot:0.1.0
+```
+
 ### 备用：pip / venv
 
 ```bash
@@ -256,7 +280,18 @@ uvicorn app.main:app --reload
 
 ## Minecraft 双向聊天桥
 
-FastAPI 侧新增了 `/api/minecraft/...` 接口，Paper 插件工程暂放在 `temp/dc_bot`，不会进入主程序 git 跟踪范围。插件默认是关闭的，只有 `plugins/DcBotPaperBridge/config.yml` 里 `enabled: true` 时才会轮询 FastAPI。插件只保留很薄的配置：`enabled`、`api-base-url`、`server-id`、`token`、轮询间隔和消息格式；Discord guild、频道、token、绑定关系都在 FastAPI/机器人状态里配置。
+FastAPI 侧新增了 `/api/minecraft/...` 接口，Paper 插件工程在 `paper-bridge/`。插件默认是关闭的，只有 `plugins/DcBotPaperBridge/config.yml` 里 `enabled: true` 时才会轮询 FastAPI。插件只保留很薄的配置：`enabled`、`api-base-url`、`server-id`、`token`、轮询间隔和消息格式；Discord guild、频道、token、绑定关系都在 FastAPI/机器人状态里配置。
+
+构建插件：
+
+```bash
+cd paper-bridge
+./gradlew build
+```
+
+Windows PowerShell 下用 `.\gradlew.bat build`。
+
+生成的 jar 在 `paper-bridge/build/libs/`。GitHub Actions 里的 `Paper Bridge Jar` workflow 只支持手动触发：进仓库网页的 Actions 页面，选择这个 workflow，点 `Run workflow` 并填版本号即可下载构建 artifact。
 
 最小配置：
 
