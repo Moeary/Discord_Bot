@@ -123,10 +123,11 @@ pixi run dev
 ### Docker
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-Docker 容器会读取 `.env`，并把 `./data` 挂载到 `/app/data`。对外部署时建议设置：
+默认使用 Docker Hub 镜像 `moeary/discord_bot:0.1.0`。Docker 容器会读取 `.env`，并把 `./data` 挂载到 `/app/data`。对外部署时建议设置：
 
 ```env
 HOST=0.0.0.0
@@ -291,7 +292,7 @@ cd paper-bridge
 
 Windows PowerShell 下用 `.\gradlew.bat build`。
 
-生成的 jar 在 `paper-bridge/build/libs/`。GitHub Actions 里的 `Paper Bridge Jar` workflow 只支持手动触发：进仓库网页的 Actions 页面，选择这个 workflow，点 `Run workflow` 并填版本号即可下载构建 artifact。
+生成的 jar 在 `paper-bridge/build/libs/`。GitHub Actions 里的 `Paper Bridge Jar` workflow 只支持手动触发：进仓库网页的 Actions 页面，选择这个 workflow，点 `Run workflow` 并填版本号。它会上传 Actions artifact，并默认发布到 GitHub Release，release tag 使用 `paper-bridge-v<版本号>`，和主项目 `v*` tag 分开。
 
 最小配置：
 

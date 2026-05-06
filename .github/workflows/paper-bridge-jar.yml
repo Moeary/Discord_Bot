@@ -7,6 +7,18 @@ on:
         description: Jar version, for example 0.1.0
         required: true
         default: "0.1.0"
+      publish_release:
+        description: Publish jar to a GitHub Release
+        required: true
+        type: boolean
+        default: true
+      release_notes:
+        description: Optional release notes
+        required: false
+        default: "Manual Paper bridge build."
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -36,3 +48,28 @@ jobs:
           name: dc-bot-paper-bridge-${{ inputs.version }}
           path: paper-bridge/build/libs/*.jar
           if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: ${{ inputs.publish_release == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: paper-bridge-v${{ inputs.version }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar="$(find paper-bridge/build/libs -maxdepth 1 -name '*.jar' -print -quit)"
+          if [[ -z "$jar" ]]; then
+            echo "No jar found under paper-bridge/build/libs" >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$jar" --clobber
+          else
+            gh release create "$TAG_NAME" "$jar" \
+              --target "$GITHUB_SHA" \
+              --title "Paper Bridge $VERSION" \
+              --notes "$RELEASE_NOTES"
+          fi

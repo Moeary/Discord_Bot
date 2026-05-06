@@ -1,7 +1,6 @@
 services:
   dc-bot:
-    build: .
-    image: dc-bot:local
+    image: moeary/discord_bot:latest
     env_file:
       - .env
     environment:

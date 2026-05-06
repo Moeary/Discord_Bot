@@ -10,7 +10,7 @@ This Paper plugin bridges chat between a Paper server and the DC Bot FastAPI app
 
 On Linux CI or a Linux server, use `./gradlew build`.
 
-The manual `Paper Bridge Jar` GitHub Actions workflow builds the plugin against the official Paper API and uploads `build/libs/dc-bot-paper-bridge-<version>.jar` as a workflow artifact.
+The manual `Paper Bridge Jar` GitHub Actions workflow builds the plugin against the official Paper API, uploads `build/libs/dc-bot-paper-bridge-<version>.jar` as a workflow artifact, and can publish it to a GitHub Release tagged as `paper-bridge-v<version>`.
 
 ## Paper Config
 
