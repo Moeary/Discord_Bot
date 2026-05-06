@@ -7,8 +7,8 @@ platforms = ["win-64"]
 
 [tasks]
 check = "python -c \"import app.main; print('app-import-ok')\""
-dev = "uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
-start = "uvicorn app.main:app --host 127.0.0.1 --port 8000"
+dev = "python -m app.run --reload"
+start = "python -m app.run"
 
 [dependencies]
 python = "3.10.*"

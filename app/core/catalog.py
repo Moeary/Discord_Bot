@@ -36,6 +36,13 @@ GUILD_SETTING_SPECS = {
     "ai_enabled": {"type": "bool", "description": "是否启用 AI 功能。"},
     "fun_enabled": {"type": "bool", "description": "是否启用娱乐功能。"},
     "tax_enabled": {"type": "bool", "description": "是否启用搬屎交税。"},
+    "minecraft_bridge_enabled": {"type": "bool", "description": "是否启用 Minecraft 与 Discord 双向聊天。"},
+    "minecraft_server_id": {"type": "str", "description": "Paper 插件连接时使用的 server_id。"},
+    "minecraft_server_address": {"type": "str", "description": "Minecraft 服务器地址，用于记录和展示，例如 127.0.0.1:30001。"},
+    "minecraft_channel_id": {"type": "int_optional", "description": "Minecraft 聊天同步到的 Discord 频道 ID。"},
+    "minecraft_token": {"type": "str", "description": "Paper 插件访问 FastAPI 的 Bearer/X-DC-Bot-Token。留空时只允许本机或内网连接。"},
+    "minecraft_allow_no_token": {"type": "bool", "description": "未配置 token 时是否允许本机或内网地址直连。"},
+    "minecraft_max_message_length": {"type": "int", "description": "Minecraft/Discord 互通单条消息最大长度。"},
     "welcome_channel_id": {"type": "int_optional", "description": "欢迎频道 ID，也支持直接传 `<#频道>`。"},
     "welcome_text": {
         "type": "str",
@@ -238,6 +245,27 @@ COMMAND_REFERENCE = [
     },
     {"group": "config", "name": "/config view", "description": "查看当前服务器和全局配置。", "permission": "admin", "entrypoints": ["slash"]},
     {"group": "config", "name": "/config set", "description": "按配置项名自动修改服务器或全局配置。", "permission": "admin", "entrypoints": ["slash"]},
+    {
+        "group": "minecraft",
+        "name": "/minecraft bind",
+        "description": "绑定自己的 Minecraft 用户名；Discord 转发到游戏时会用这个名字显示。",
+        "permission": "user",
+        "entrypoints": ["slash"],
+    },
+    {
+        "group": "minecraft",
+        "name": "/minecraft unbind",
+        "description": "解除自己的 Minecraft 用户名绑定。",
+        "permission": "user",
+        "entrypoints": ["slash"],
+    },
+    {
+        "group": "minecraft",
+        "name": "/minecraft status",
+        "description": "查看当前服务器的 Minecraft 互通配置和自己的绑定。",
+        "permission": "user",
+        "entrypoints": ["slash"],
+    },
 ]
 
 

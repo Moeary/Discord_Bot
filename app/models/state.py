@@ -30,6 +30,13 @@ class GuildSettings(BaseModel):
     ai_enabled: bool = True
     fun_enabled: bool = True
     tax_enabled: bool = True
+    minecraft_bridge_enabled: bool = False
+    minecraft_server_id: str = "default"
+    minecraft_server_address: str = ""
+    minecraft_channel_id: int | None = None
+    minecraft_token: str = ""
+    minecraft_allow_no_token: bool = True
+    minecraft_max_message_length: int = 300
     welcome_channel_id: int | None = None
     welcome_text: str = "{user_mention} 欢迎来到 {guild_name}。请别立刻把这里炸了。"
     verification_channel_id: int | None = None
@@ -96,4 +103,5 @@ class AppState(BaseModel):
     guilds: dict[str, GuildSettings] = Field(default_factory=dict)
     stats: dict[str, GuildStats] = Field(default_factory=dict)
     user_preferences: dict[str, dict[str, UserImagePreferences]] = Field(default_factory=dict)
+    minecraft_bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
     tax_cases: list[TaxCase] = Field(default_factory=list)

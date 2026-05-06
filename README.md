@@ -117,8 +117,8 @@ pixi run dev
 常用命令：
 
 - `pixi run check`：检查项目能否正常导入
-- `pixi run dev`：开发模式启动 FastAPI
-- `pixi run start`：普通启动
+- `pixi run dev`：开发模式启动 FastAPI，读取 `.env` 里的 `HOST` / `PORT`
+- `pixi run start`：普通启动，读取 `.env` 里的 `HOST` / `PORT`
 
 ### 备用：pip / venv
 
@@ -191,6 +191,12 @@ uvicorn app.main:app --reload
 - `/fun duel`
 - `/fun leaderboard`
 
+### Minecraft
+
+- `/minecraft bind username:<Minecraft 用户名>`
+- `/minecraft unbind`
+- `/minecraft status`
+
 ### 配置
 
 - `/config view`
@@ -212,6 +218,13 @@ uvicorn app.main:app --reload
 - `ai_enabled`
 - `fun_enabled`
 - `tax_enabled`
+- `minecraft_bridge_enabled`
+- `minecraft_server_id`
+- `minecraft_server_address`
+- `minecraft_channel_id`
+- `minecraft_token`
+- `minecraft_allow_no_token`
+- `minecraft_max_message_length`
 - `welcome_channel_id`
 - `welcome_text`
 - `verification_channel_id`
@@ -240,6 +253,31 @@ uvicorn app.main:app --reload
 - `{minutes}`
 - `{required_images}`
 - `{mute_hours}`
+
+## Minecraft 双向聊天桥
+
+FastAPI 侧新增了 `/api/minecraft/...` 接口，Paper 插件工程暂放在 `temp/dc_bot`，不会进入主程序 git 跟踪范围。插件默认是关闭的，只有 `plugins/DcBotPaperBridge/config.yml` 里 `enabled: true` 时才会轮询 FastAPI。插件只保留很薄的配置：`enabled`、`api-base-url`、`server-id`、`token`、轮询间隔和消息格式；Discord guild、频道、token、绑定关系都在 FastAPI/机器人状态里配置。
+
+最小配置：
+
+1. 在 `.env` 里设置：
+   - `MINECRAFT_BRIDGE_ENABLED=true`
+   - `MINECRAFT_GUILD_ID=<Discord 服务器 ID>`
+   - `MINECRAFT_SERVER_ID=default`
+   - `MINECRAFT_SERVER_ADDRESS=127.0.0.1:30001`
+   - `MINECRAFT_CHANNEL_ID=<要同步的 Discord 文本频道 ID，不是服务器 ID>`
+   - `MINECRAFT_TOKEN=<可选，和插件一致>`
+   - `MINECRAFT_ALLOWED_CLIENTS=<可选，Paper 来源 IP/CIDR 白名单>`
+2. 在 Paper 插件配置 `plugins/DcBotPaperBridge/config.yml` 里设置：
+   - `enabled: true`
+   - `api-base-url: "http://127.0.0.1:8000"`
+   - `server-id: "default"`
+   - `token: "<和 FastAPI 一致，可空>"`
+3. 用户用 `/minecraft bind <username>` 绑定身份；Discord 同步到游戏时会显示为 `<username> 消息`。
+
+`MINECRAFT_GUILD_ID` 可以不填：没填时会优先复用 `DISCORD_TEST_GUILD_ID`，或者按 `MINECRAFT_CHANNEL_ID` 对应的 Discord 频道自动判断。
+
+如果 `minecraft_token` 留空，FastAPI 只允许本机、内网或链路本地地址直连，并且仍会做 `server_id` 校验、消息长度限制和短窗口限速。跨公网时建议同时设置 `MINECRAFT_TOKEN`、`MINECRAFT_ALLOW_NO_TOKEN=false` 和 `MINECRAFT_ALLOWED_CLIENTS`，例如 `203.0.113.10` 或 `203.0.113.0/24`。
 
 ## Rule34 凭据怎么拿
 

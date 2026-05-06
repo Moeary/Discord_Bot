@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from app.api.routes.ai import router as ai_router
 from app.api.routes.health import health as health_handler
 from app.api.routes.health import router as health_router
+from app.api.routes.minecraft import router as minecraft_router
 from app.api.routes.settings import router as settings_router
 from app.bot.client import BotManager, EntertainmentBot
 from app.core.catalog import get_setting_catalog
@@ -19,12 +20,25 @@ from app.core.config import BASE_DIR, get_env_settings
 from app.models.state import GlobalSettings
 from app.services.ai_router import ProfiledAIClient
 from app.services.image_sources import ImageSourceRouter
+from app.services.minecraft_bridge import MinecraftBridge
 from app.services.personas import PersonaStore
 from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
 
 
 logging.basicConfig(level=logging.INFO)
+
+
+class _MinecraftPollAccessLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not (
+            "GET /api/minecraft/servers/" in message
+            and "/messages?" in message
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_MinecraftPollAccessLogFilter())
 
 env = get_env_settings()
 store = StateStore(env.state_file)
@@ -40,6 +54,8 @@ bot = EntertainmentBot(
     personas=personas,
     saucenao=saucenao,
 )
+minecraft_bridge = MinecraftBridge(store=store, bot=bot, env=env)
+bot.minecraft_bridge = minecraft_bridge
 bot_manager = BotManager(bot, env)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "web" / "templates"))
@@ -144,6 +160,7 @@ app.state.openrouter = openrouter
 app.state.image_sources = image_sources
 app.state.personas = personas
 app.state.saucenao = saucenao
+app.state.minecraft_bridge = minecraft_bridge
 app.state.bot_manager = bot_manager
 app.state.health_provider = health_handler
 
@@ -151,6 +168,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "web" / "stati
 app.include_router(health_router)
 app.include_router(settings_router)
 app.include_router(ai_router)
+app.include_router(minecraft_router)
 
 
 @app.get("/", response_class=HTMLResponse)

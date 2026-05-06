@@ -124,6 +124,36 @@ class StateStore:
             await self._save_unlocked()
             return preferences.model_copy(deep=True)
 
+    async def get_minecraft_binding(self, guild_id: int, user_id: int) -> str | None:
+        await self.load()
+        async with self._lock:
+            return self._state.minecraft_bindings.get(str(guild_id), {}).get(str(user_id))
+
+    async def list_minecraft_bindings(self, guild_id: int) -> dict[str, str]:
+        await self.load()
+        async with self._lock:
+            return dict(self._state.minecraft_bindings.get(str(guild_id), {}))
+
+    async def set_minecraft_binding(self, guild_id: int, user_id: int, username: str) -> dict[str, str]:
+        await self.load()
+        async with self._lock:
+            guild_bindings = self._state.minecraft_bindings.setdefault(str(guild_id), {})
+            guild_bindings[str(user_id)] = username
+            await self._save_unlocked()
+            return dict(guild_bindings)
+
+    async def remove_minecraft_binding(self, guild_id: int, user_id: int) -> bool:
+        await self.load()
+        async with self._lock:
+            guild_bindings = self._state.minecraft_bindings.get(str(guild_id))
+            if not guild_bindings or str(user_id) not in guild_bindings:
+                return False
+            del guild_bindings[str(user_id)]
+            if not guild_bindings:
+                self._state.minecraft_bindings.pop(str(guild_id), None)
+            await self._save_unlocked()
+            return True
+
     async def add_tax_case(self, tax_case: TaxCase) -> TaxCase:
         await self.load()
         async with self._lock:

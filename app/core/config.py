@@ -62,14 +62,24 @@ class EnvSettings(BaseSettings):
     host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
 
+    minecraft_bridge_enabled: bool = Field(default=False, alias="MINECRAFT_BRIDGE_ENABLED")
+    minecraft_guild_id: int | None = Field(default=None, alias="MINECRAFT_GUILD_ID")
+    minecraft_server_id: str = Field(default="default", alias="MINECRAFT_SERVER_ID")
+    minecraft_server_address: str = Field(default="", alias="MINECRAFT_SERVER_ADDRESS")
+    minecraft_channel_id: int | None = Field(default=None, alias="MINECRAFT_CHANNEL_ID")
+    minecraft_token: str = Field(default="", alias="MINECRAFT_TOKEN")
+    minecraft_allow_no_token: bool = Field(default=True, alias="MINECRAFT_ALLOW_NO_TOKEN")
+    minecraft_allowed_clients: str = Field(default="", alias="MINECRAFT_ALLOWED_CLIENTS")
+    minecraft_max_message_length: int = Field(default=300, alias="MINECRAFT_MAX_MESSAGE_LENGTH")
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
 
-    @field_validator("discord_test_guild_id", mode="before")
+    @field_validator("discord_test_guild_id", "minecraft_guild_id", "minecraft_channel_id", mode="before")
     @classmethod
     def empty_string_to_none(cls, value):
         if value in {"", None}:

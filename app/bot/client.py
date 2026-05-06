@@ -16,6 +16,7 @@ from app.services.ai_router import ProfiledAIClient
 from app.models.state import GuildSettings, TaxCase, UserImagePreferences, utcnow
 from app.services.fun import FunService
 from app.services.image_sources import ImageSourceRouter
+from app.services.minecraft_bridge import is_valid_minecraft_username
 from app.services.personas import PersonaStore
 from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
@@ -73,6 +74,7 @@ class EntertainmentBot(commands.Bot):
         self.image_sources = image_sources
         self.personas = personas
         self.saucenao = saucenao
+        self.minecraft_bridge = None
         self._commands_registered = False
         self._synced = False
 
@@ -101,6 +103,7 @@ class EntertainmentBot(commands.Bot):
     def _register_commands(self) -> None:
         ai_group = app_commands.Group(name="ai", description="AI 功能")
         fun_group = app_commands.Group(name="fun", description="娱乐功能")
+        minecraft_group = app_commands.Group(name="minecraft", description="Minecraft 互通")
         config_group = app_commands.Group(
             name="config",
             description="配置功能",
@@ -720,6 +723,45 @@ class EntertainmentBot(commands.Bot):
                 )
             await interaction.response.send_message("\n".join(lines))
 
+        @minecraft_group.command(name="bind", description="绑定你的 Minecraft 用户名")
+        @app_commands.describe(username="Minecraft 用户名，3-16 位字母、数字或下划线")
+        async def minecraft_bind(interaction: discord.Interaction, username: str) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            username = username.strip()
+            if not is_valid_minecraft_username(username):
+                await interaction.response.send_message("Minecraft 用户名必须是 3-16 位字母、数字或下划线。", ephemeral=True)
+                return
+            await self.store.set_minecraft_binding(interaction.guild_id, interaction.user.id, username)
+            await interaction.response.send_message(f"已绑定 Minecraft 用户名 `{username}`。", ephemeral=True)
+
+        @minecraft_group.command(name="unbind", description="解除你的 Minecraft 用户名绑定")
+        async def minecraft_unbind(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            removed = await self.store.remove_minecraft_binding(interaction.guild_id, interaction.user.id)
+            text = "已解除 Minecraft 用户名绑定。" if removed else "你还没有绑定 Minecraft 用户名。"
+            await interaction.response.send_message(text, ephemeral=True)
+
+        @minecraft_group.command(name="status", description="查看 Minecraft 互通状态")
+        async def minecraft_status(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            binding = await self.store.get_minecraft_binding(interaction.guild_id, interaction.user.id)
+            channel = f"<#{guild_settings.minecraft_channel_id}>" if guild_settings.minecraft_channel_id else "未配置"
+            text = "\n".join(
+                [
+                    f"启用: `{guild_settings.minecraft_bridge_enabled}`",
+                    f"server_id: `{guild_settings.minecraft_server_id}`",
+                    f"频道: {channel}",
+                    f"你的绑定: `{binding or '未绑定'}`",
+                ]
+            )
+            await interaction.response.send_message(text, ephemeral=True)
+
         @config_group.command(name="view", description="查看当前服务器与全局配置")
         async def config_view(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
@@ -734,6 +776,12 @@ class EntertainmentBot(commands.Bot):
                             f"`ai_enabled`: {guild_settings.ai_enabled}",
                             f"`fun_enabled`: {guild_settings.fun_enabled}",
                             f"`tax_enabled`: {guild_settings.tax_enabled}",
+                            f"`minecraft_bridge_enabled`: {guild_settings.minecraft_bridge_enabled}",
+                            f"`minecraft_server_id`: {guild_settings.minecraft_server_id}",
+                            f"`minecraft_server_address`: {guild_settings.minecraft_server_address}",
+                            f"`minecraft_channel_id`: {guild_settings.minecraft_channel_id}",
+                            f"`minecraft_allow_no_token`: {guild_settings.minecraft_allow_no_token}",
+                            f"`minecraft_max_message_length`: {guild_settings.minecraft_max_message_length}",
                             f"`welcome_channel_id`: {guild_settings.welcome_channel_id}",
                             f"`welcome_text`: {guild_settings.welcome_text}",
                             f"`verification_channel_id`: {guild_settings.verification_channel_id}",
@@ -891,6 +939,7 @@ class EntertainmentBot(commands.Bot):
 
         self.tree.add_command(ai_group)
         self.tree.add_command(fun_group)
+        self.tree.add_command(minecraft_group)
         self.tree.add_command(config_group)
         self.tree.add_command(message_redraw)
         self.tree.add_command(message_sauce)
@@ -1058,6 +1107,8 @@ class EntertainmentBot(commands.Bot):
                         mention_author=False,
                     )
 
+        await self._try_forward_discord_to_minecraft(message, settings)
+
         if settings.ai_enabled and await self._is_direct_ai_trigger(message):
             prompt = self._extract_direct_ai_prompt(message)
             image_urls = self._extract_image_urls_from_message(message)
@@ -1111,6 +1162,16 @@ class EntertainmentBot(commands.Bot):
             return
 
         await self.process_commands(message)
+
+    async def _try_forward_discord_to_minecraft(self, message: discord.Message, settings: GuildSettings) -> bool:
+        bridge = self.minecraft_bridge
+        if bridge is None:
+            return False
+        try:
+            return await bridge.enqueue_discord_message(message, settings)
+        except Exception:
+            LOGGER.exception("Failed to enqueue Discord message for Minecraft bridge")
+            return False
 
     @tasks.loop(minutes=1)
     async def tax_deadline_watcher(self) -> None:
