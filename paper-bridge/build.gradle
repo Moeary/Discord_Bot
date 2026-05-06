@@ -1,0 +1,31 @@
+plugins {
+    id "java"
+}
+
+group = "com.dcbot"
+version = providers.gradleProperty("pluginVersion").orElse("0.1.0").get()
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+dependencies {
+    compileOnly "io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = 21
+}
+
+tasks.processResources {
+    inputs.property("version", project.version)
+    filesMatching("plugin.yml") {
+        expand(version: project.version)
+    }
+}
+
+tasks.jar {
+    archiveBaseName = "dc-bot-paper-bridge"
+}

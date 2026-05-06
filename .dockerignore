@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+.pixi
+.pixi-cache
+.vscode
+__pycache__
+*.pyc
+data/state.json
+data/providers.json
+temp
+paper-bridge/.gradle
+paper-bridge/.gradle-user-home
+paper-bridge/build

@@ -12,22 +12,50 @@ from fastapi.templating import Jinja2Templates
 from app.api.routes.ai import router as ai_router
 from app.api.routes.health import health as health_handler
 from app.api.routes.health import router as health_router
+from app.api.routes.minecraft import router as minecraft_router
 from app.api.routes.settings import router as settings_router
 from app.bot.client import BotManager, EntertainmentBot
+from app.core.catalog import get_setting_catalog
 from app.core.config import BASE_DIR, get_env_settings
 from app.models.state import GlobalSettings
-from app.services.danbooru import DanbooruClient
 from app.services.ai_router import ProfiledAIClient
+from app.services.image_sources import ImageSourceRouter
+from app.services.minecraft_bridge import MinecraftBridge
+from app.services.personas import PersonaStore
+from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
 
 
 logging.basicConfig(level=logging.INFO)
 
+
+class _MinecraftPollAccessLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not (
+            "GET /api/minecraft/servers/" in message
+            and "/messages?" in message
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_MinecraftPollAccessLogFilter())
+
 env = get_env_settings()
 store = StateStore(env.state_file)
 openrouter = ProfiledAIClient(env)
-danbooru = DanbooruClient(env)
-bot = EntertainmentBot(env=env, store=store, openrouter=openrouter, danbooru=danbooru)
+image_sources = ImageSourceRouter(env)
+personas = PersonaStore(env)
+saucenao = SauceNaoClient(env)
+bot = EntertainmentBot(
+    env=env,
+    store=store,
+    openrouter=openrouter,
+    image_sources=image_sources,
+    personas=personas,
+    saucenao=saucenao,
+)
+minecraft_bridge = MinecraftBridge(store=store, bot=bot, env=env)
+bot.minecraft_bridge = minecraft_bridge
 bot_manager = BotManager(bot, env)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "web" / "templates"))
@@ -116,6 +144,8 @@ app = FastAPI(
     title="DC Entertainment Bot",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
 )
 app.add_middleware(
     CORSMiddleware,
@@ -127,7 +157,10 @@ app.add_middleware(
 app.state.env = env
 app.state.store = store
 app.state.openrouter = openrouter
-app.state.danbooru = danbooru
+app.state.image_sources = image_sources
+app.state.personas = personas
+app.state.saucenao = saucenao
+app.state.minecraft_bridge = minecraft_bridge
 app.state.bot_manager = bot_manager
 app.state.health_provider = health_handler
 
@@ -135,9 +168,30 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "web" / "stati
 app.include_router(health_router)
 app.include_router(settings_router)
 app.include_router(ai_router)
+app.include_router(minecraft_router)
 
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
+
+
+@app.get("/docs", response_class=HTMLResponse)
+async def command_docs_page(request: Request):
+    catalog = get_setting_catalog()
+    commands = catalog["commands"]
+    user_commands = [item for item in commands if item.get("permission", "user") == "user"]
+    admin_commands = [item for item in commands if item.get("permission", "user") == "admin"]
+    return templates.TemplateResponse(
+        "docs.html",
+        {
+            "request": request,
+            "catalog": catalog,
+            "user_commands": user_commands,
+            "admin_commands": admin_commands,
+            "image_profiles": request.app.state.image_sources.list_profiles(),
+            "model_profiles": request.app.state.openrouter.list_providers().get("profiles", {}),
+            "personas": request.app.state.personas.list_profiles(),
+        },
+    )

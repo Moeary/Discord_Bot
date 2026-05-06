@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.models.state import AppState, GuildSettings, GuildStats, TaxCase, UserStats, utcnow
+from app.models.state import AppState, GuildSettings, GuildStats, TaxCase, UserImagePreferences, UserStats, utcnow
 
 
 class StateStore:
@@ -53,6 +53,10 @@ class StateStore:
         guild_stats = self._state.stats.setdefault(str(guild_id), GuildStats())
         return guild_stats.user_stats.setdefault(str(user_id), UserStats())
 
+    def _ensure_user_preferences(self, guild_id: int, user_id: int) -> UserImagePreferences:
+        guild_preferences = self._state.user_preferences.setdefault(str(guild_id), {})
+        return guild_preferences.setdefault(str(user_id), UserImagePreferences())
+
     async def get_snapshot(self) -> AppState:
         await self.load()
         async with self._lock:
@@ -99,6 +103,56 @@ class StateStore:
             stats = self._ensure_user_stats(guild_id, user_id)
             setattr(stats, field_name, getattr(stats, field_name) + amount)
             await self._save_unlocked()
+
+    async def get_user_preferences(self, guild_id: int, user_id: int) -> UserImagePreferences:
+        await self.load()
+        async with self._lock:
+            preferences = self._ensure_user_preferences(guild_id, user_id)
+            return preferences.model_copy(deep=True)
+
+    async def update_user_preferences(
+        self,
+        guild_id: int,
+        user_id: int,
+        updates: dict[str, object],
+    ) -> UserImagePreferences:
+        await self.load()
+        async with self._lock:
+            preferences = self._ensure_user_preferences(guild_id, user_id)
+            for key, value in updates.items():
+                setattr(preferences, key, value)
+            await self._save_unlocked()
+            return preferences.model_copy(deep=True)
+
+    async def get_minecraft_binding(self, guild_id: int, user_id: int) -> str | None:
+        await self.load()
+        async with self._lock:
+            return self._state.minecraft_bindings.get(str(guild_id), {}).get(str(user_id))
+
+    async def list_minecraft_bindings(self, guild_id: int) -> dict[str, str]:
+        await self.load()
+        async with self._lock:
+            return dict(self._state.minecraft_bindings.get(str(guild_id), {}))
+
+    async def set_minecraft_binding(self, guild_id: int, user_id: int, username: str) -> dict[str, str]:
+        await self.load()
+        async with self._lock:
+            guild_bindings = self._state.minecraft_bindings.setdefault(str(guild_id), {})
+            guild_bindings[str(user_id)] = username
+            await self._save_unlocked()
+            return dict(guild_bindings)
+
+    async def remove_minecraft_binding(self, guild_id: int, user_id: int) -> bool:
+        await self.load()
+        async with self._lock:
+            guild_bindings = self._state.minecraft_bindings.get(str(guild_id))
+            if not guild_bindings or str(user_id) not in guild_bindings:
+                return False
+            del guild_bindings[str(user_id)]
+            if not guild_bindings:
+                self._state.minecraft_bindings.pop(str(guild_id), None)
+            await self._save_unlocked()
+            return True
 
     async def add_tax_case(self, tax_case: TaxCase) -> TaxCase:
         await self.load()

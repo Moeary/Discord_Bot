@@ -12,10 +12,13 @@ from discord.ext import commands, tasks
 
 from app.core.catalog import GLOBAL_SETTING_SPECS, GUILD_SETTING_SPECS, cast_setting_value
 from app.core.config import EnvSettings
-from app.models.state import GuildSettings, TaxCase, utcnow
-from app.services.danbooru import DanbooruClient
-from app.services.fun import FunService
 from app.services.ai_router import ProfiledAIClient
+from app.models.state import GuildSettings, TaxCase, UserImagePreferences, utcnow
+from app.services.fun import FunService
+from app.services.image_sources import ImageSourceRouter
+from app.services.minecraft_bridge import is_valid_minecraft_username
+from app.services.personas import PersonaStore
+from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
 
 
@@ -53,7 +56,9 @@ class EntertainmentBot(commands.Bot):
         env: EnvSettings,
         store: StateStore,
         openrouter: ProfiledAIClient,
-        danbooru: DanbooruClient,
+        image_sources: ImageSourceRouter,
+        personas: PersonaStore,
+        saucenao: SauceNaoClient,
     ) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
@@ -66,7 +71,10 @@ class EntertainmentBot(commands.Bot):
         self.env = env
         self.store = store
         self.openrouter = openrouter
-        self.danbooru = danbooru
+        self.image_sources = image_sources
+        self.personas = personas
+        self.saucenao = saucenao
+        self.minecraft_bridge = None
         self._commands_registered = False
         self._synced = False
 
@@ -95,6 +103,7 @@ class EntertainmentBot(commands.Bot):
     def _register_commands(self) -> None:
         ai_group = app_commands.Group(name="ai", description="AI 功能")
         fun_group = app_commands.Group(name="fun", description="娱乐功能")
+        minecraft_group = app_commands.Group(name="minecraft", description="Minecraft 互通")
         config_group = app_commands.Group(
             name="config",
             description="配置功能",
@@ -126,7 +135,13 @@ class EntertainmentBot(commands.Bot):
             if image is not None and self._attachment_is_image(image):
                 image_urls.append(image.url)
             messages = [
-                {"role": "system", "content": self._compose_ai_system_prompt(global_settings.system_prompt)},
+                {
+                    "role": "system",
+                    "content": self._compose_ai_system_prompt(
+                        self._resolve_system_prompt(global_settings),
+                        global_settings,
+                    ),
+                },
                 {
                     "role": "user",
                     "content": self._build_user_multimodal_content(
@@ -173,7 +188,10 @@ class EntertainmentBot(commands.Bot):
 
             try:
                 reply = await self.openrouter.summarize_text(
-                    self._compose_ai_system_prompt(global_settings.summary_system_prompt),
+                    self._compose_ai_system_prompt(
+                        self._resolve_summary_prompt(global_settings),
+                        global_settings,
+                    ),
                     transcript,
                     profile=global_settings.chat_model_profile,
                     fallback_profiles=global_settings.chat_fallback_profiles,
@@ -187,7 +205,7 @@ class EntertainmentBot(commands.Bot):
 
         @ai_group.command(name="draw", description="AI 绘图")
         @app_commands.describe(
-            prompt="你想生成的图片描述",
+            prompt="你想生成或改图的描述，可留空让系统按参考图自动补一句",
             profile="可选：指定绘图模型档案名，例如 grsai-sora-image / grsai-banana2",
             model="可选：临时覆盖档案内的模型名",
             size="可选：比例参数。Sora/GPT 用 size，Banana 档案会把它当 aspectRatio",
@@ -196,7 +214,7 @@ class EntertainmentBot(commands.Bot):
         )
         async def ai_draw(
             interaction: discord.Interaction,
-            prompt: str,
+            prompt: str | None = None,
             profile: str | None = None,
             model: str | None = None,
             size: str = "1:1",
@@ -216,10 +234,16 @@ class EntertainmentBot(commands.Bot):
             urls: list[str] = []
             if image is not None and self._attachment_is_image(image):
                 urls.append(image.url)
+            prompt_text = (prompt or "").strip()
+            if not prompt_text and urls:
+                prompt_text = "请基于提供的图片做一次高质量改图，保留主体、角色特征和关键细节。"
+            if not prompt_text:
+                await interaction.followup.send("想让我画图的话，至少给一句描述，或者附上一张参考图。")
+                return
 
             try:
                 result = await self.openrouter.draw(
-                    prompt=prompt,
+                    prompt=prompt_text,
                     model=model or None,
                     profile=draw_profile,
                     fallback_profiles=global_settings.draw_fallback_profiles,
@@ -248,27 +272,51 @@ class EntertainmentBot(commands.Bot):
             header = " | ".join(header_parts)
             await interaction.followup.send("\n".join([header, *images]))
 
-        @ai_group.command(name="image", description="AI 画图（/ai draw 别名）")
+        @fun_group.command(name="image", description="让系统替你捞一张图，按当前图站档案处理")
         @app_commands.describe(
-            prompt="你想生成的图片描述",
-            profile="可选：指定绘图模型档案名，例如 grsai-sora-image / grsai-banana2",
-            model="可选：临时覆盖档案内的模型名",
-            size="可选：比例参数",
-            variants="可选：生成张数 1 或 2",
-            image="可选：参考图",
+            style="safe 表示美图，explicit 表示涩图",
+            tags="额外标签，例如 1girl blue_hair",
+            profile="可选：临时指定图站档案，例如 danbooru / rule34",
         )
-        async def ai_image(
+        async def fun_image(
             interaction: discord.Interaction,
-            prompt: str,
+            style: str = "safe",
+            tags: str | None = None,
             profile: str | None = None,
-            model: str | None = None,
-            size: str = "1:1",
-            variants: app_commands.Range[int, 1, 2] = 1,
-            image: discord.Attachment | None = None,
         ) -> None:
-            await ai_draw(interaction, prompt, profile, model, size, variants, image)
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
 
-        @fun_group.command(name="danbooru", description="Danbooru 随机找图")
+            rating_mode = self._normalize_image_style(style)
+            if rating_mode is None:
+                await interaction.response.send_message("style 只能是 `safe` 或 `explicit`。", ephemeral=True)
+                return
+            if rating_mode == "explicit" and not self._channel_is_nsfw(interaction.channel):
+                await interaction.response.send_message("涩图去 NSFW 频道叫我。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True)
+            try:
+                embed = await self._build_image_response_embed(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                    rating_mode=rating_mode,
+                    extra_tags=tags or "",
+                    profile_override=profile,
+                )
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"图站请求失败：{self._describe_error(exc)}")
+                return
+
+            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
+            await interaction.followup.send(embed=embed)
+
+        @fun_group.command(name="danbooru", description="固定从 Danbooru 捞一张图")
         @app_commands.describe(tags="额外标签，例如 1girl blue_hair")
         async def fun_danbooru(interaction: discord.Interaction, tags: str | None = None) -> None:
             guild_settings = await self._require_guild_settings(interaction)
@@ -280,22 +328,58 @@ class EntertainmentBot(commands.Bot):
 
             await interaction.response.defer(thinking=True)
             try:
-                is_nsfw = self._channel_is_nsfw(interaction.channel)
-                post = await self._fetch_danbooru_post(
-                    guild_settings,
-                    tags or "",
-                    forced_rating="rating:e" if is_nsfw else "rating:s",
+                embed = await self._build_image_response_embed(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                    rating_mode="explicit" if self._channel_is_nsfw(interaction.channel) else "safe",
+                    extra_tags=tags or "",
+                    profile_override="danbooru",
                 )
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"Danbooru 请求失败：{exc}")
+                await interaction.followup.send(f"图站请求失败：{self._describe_error(exc)}")
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
-            await interaction.followup.send(embed=self._build_danbooru_embed(post))
+            await interaction.followup.send(embed=embed)
 
-        @fun_group.command(name="pretty", description="来张安全美图")
-        @app_commands.describe(tags="额外标签，例如 1girl blue_hair")
-        async def fun_pretty(interaction: discord.Interaction, tags: str | None = None) -> None:
+        @fun_group.command(name="rule34", description="固定从 Rule34 捞一张涩图")
+        @app_commands.describe(tags="额外标签，例如 bunny_girl azur_lane")
+        async def fun_rule34(interaction: discord.Interaction, tags: str | None = None) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+            if not self._channel_is_nsfw(interaction.channel):
+                await interaction.response.send_message("Rule34 也请去 NSFW 频道叫我。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True)
+            try:
+                embed = await self._build_image_response_embed(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                    rating_mode="explicit",
+                    extra_tags=tags or "",
+                    profile_override="rule34",
+                )
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"图站请求失败：{self._describe_error(exc)}")
+                return
+
+            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
+            await interaction.followup.send(embed=embed)
+
+        @fun_group.command(name="pretty", description="请求一张勉强适合公开展示的美图")
+        @app_commands.describe(tags="额外标签，例如 1girl blue_hair", profile="可选：临时指定图站档案")
+        async def fun_pretty(
+            interaction: discord.Interaction,
+            tags: str | None = None,
+            profile: str | None = None,
+        ) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
                 return
@@ -305,17 +389,28 @@ class EntertainmentBot(commands.Bot):
 
             await interaction.response.defer(thinking=True)
             try:
-                post = await self._fetch_danbooru_post(guild_settings, tags or "", forced_rating="rating:s")
+                embed = await self._build_image_response_embed(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                    rating_mode="safe",
+                    extra_tags=tags or "",
+                    profile_override=profile,
+                )
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"Danbooru 请求失败：{exc}")
+                await interaction.followup.send(f"图站请求失败：{self._describe_error(exc)}")
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
-            await interaction.followup.send(embed=self._build_danbooru_embed(post))
+            await interaction.followup.send(embed=embed)
 
-        @fun_group.command(name="lewd", description="来张涩图，仅限 NSFW 频道")
-        @app_commands.describe(tags="额外标签，例如 azur_lane bunny_girl")
-        async def fun_lewd(interaction: discord.Interaction, tags: str | None = None) -> None:
+        @fun_group.command(name="lewd", description="请求一张需要 NSFW 频道兜底的涩图")
+        @app_commands.describe(tags="额外标签，例如 azur_lane bunny_girl", profile="可选：临时指定图站档案")
+        async def fun_lewd(
+            interaction: discord.Interaction,
+            tags: str | None = None,
+            profile: str | None = None,
+        ) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
                 return
@@ -328,15 +423,136 @@ class EntertainmentBot(commands.Bot):
 
             await interaction.response.defer(thinking=True)
             try:
-                post = await self._fetch_danbooru_post(guild_settings, tags or "", forced_rating="rating:e")
+                embed = await self._build_image_response_embed(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                    rating_mode="explicit",
+                    extra_tags=tags or "",
+                    profile_override=profile,
+                )
             except Exception as exc:  # pragma: no cover - network bound
-                await interaction.followup.send(f"Danbooru 请求失败：{exc}")
+                await interaction.followup.send(f"图站请求失败：{self._describe_error(exc)}")
                 return
 
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "danbooru_calls")
-            await interaction.followup.send(embed=self._build_danbooru_embed(post))
+            await interaction.followup.send(embed=embed)
 
-        @fun_group.command(name="fortune", description="看看今天运势")
+        @fun_group.command(name="image_prefs", description="查看你自己的图站偏好")
+        async def fun_image_prefs(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            preferences = await self.store.get_user_preferences(interaction.guild_id, interaction.user.id)
+            lines = [
+                f"`safe_image_site_profile`: {preferences.safe_image_site_profile or guild_settings.safe_image_site_profile}",
+                f"`explicit_image_site_profile`: {preferences.explicit_image_site_profile or guild_settings.explicit_image_site_profile}",
+                f"`safe_image_tags`: {preferences.safe_image_tags or guild_settings.safe_image_default_tags or '-'}",
+                f"`explicit_image_tags`: {preferences.explicit_image_tags or guild_settings.explicit_image_default_tags or '-'}",
+            ]
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+        @fun_group.command(name="image_source", description="设置你自己的美图/涩图默认图站")
+        @app_commands.describe(style="safe 表示美图，explicit 表示涩图", profile="图站档案名，例如 danbooru / rule34")
+        async def fun_image_source(interaction: discord.Interaction, style: str, profile: str) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            rating_mode = self._normalize_image_style(style)
+            if rating_mode is None:
+                await interaction.response.send_message("style 只能是 `safe` 或 `explicit`。", ephemeral=True)
+                return
+            available_profiles = self.image_sources.list_profiles()
+            if profile not in available_profiles:
+                await interaction.response.send_message(
+                    f"未知图站档案。可选：{', '.join(sorted(available_profiles))}",
+                    ephemeral=True,
+                )
+                return
+            capability_key = "supports_safe" if rating_mode == "safe" else "supports_explicit"
+            if not available_profiles[profile].get(capability_key):
+                await interaction.response.send_message(
+                    f"`{profile}` 不支持当前模式 `{rating_mode}`。",
+                    ephemeral=True,
+                )
+                return
+            target_key = "safe_image_site_profile" if rating_mode == "safe" else "explicit_image_site_profile"
+            updated = await self.store.update_user_preferences(interaction.guild_id, interaction.user.id, {target_key: profile})
+            await interaction.response.send_message(
+                f"已更新你的 `{target_key}` -> `{getattr(updated, target_key)}`",
+                ephemeral=True,
+            )
+
+        @fun_group.command(name="image_tags", description="设置你自己的美图/涩图默认 tag")
+        @app_commands.describe(style="safe 表示美图，explicit 表示涩图", tags="输入标签；填 clear / none / - 可以清空")
+        async def fun_image_tags(interaction: discord.Interaction, style: str, tags: str) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            rating_mode = self._normalize_image_style(style)
+            if rating_mode is None:
+                await interaction.response.send_message("style 只能是 `safe` 或 `explicit`。", ephemeral=True)
+                return
+            normalized_tags = "" if tags.strip().lower() in {"clear", "none", "-"} else tags.strip()
+            target_key = "safe_image_tags" if rating_mode == "safe" else "explicit_image_tags"
+            updated = await self.store.update_user_preferences(
+                interaction.guild_id,
+                interaction.user.id,
+                {target_key: normalized_tags},
+            )
+            await interaction.response.send_message(
+                f"已更新你的 `{target_key}` -> `{getattr(updated, target_key) or '-'}`",
+                ephemeral=True,
+            )
+
+        @fun_group.command(name="image_sites", description="列出当前可用的图站档案")
+        async def fun_image_sites(interaction: discord.Interaction) -> None:
+            profiles = self.image_sources.list_profiles()
+            lines = []
+            for name, item in sorted(profiles.items()):
+                support = []
+                if item.get("supports_safe"):
+                    support.append("safe")
+                if item.get("supports_explicit"):
+                    support.append("explicit")
+                lines.append(f"`{name}` | 支持: {', '.join(support) or '-'} | {item.get('description', '')}")
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+        @fun_group.command(name="sauce", description="用 SauceNAO 反查图片来源")
+        @app_commands.describe(
+            image="可选：直接附一张图",
+            url="可选：直接贴图片 URL",
+        )
+        async def fun_sauce(
+            interaction: discord.Interaction,
+            image: discord.Attachment | None = None,
+            url: str | None = None,
+        ) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+
+            image_url = url.strip() if url and url.strip() else None
+            if image_url is None and image is not None and self._attachment_is_image(image):
+                image_url = image.url
+            if image_url is None:
+                await interaction.response.send_message("给我一张图或者一个图片 URL，我才有东西可查。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            try:
+                payload = await self.saucenao.search(image_url)
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"SauceNAO 搜图失败：{self._describe_error(exc)}", ephemeral=True)
+                return
+
+            embed = self._build_saucenao_embed(payload, image_url)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        @fun_group.command(name="fortune", description="查看今日系统运势评估")
         async def fun_fortune(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
@@ -345,28 +561,18 @@ class EntertainmentBot(commands.Bot):
                 await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
                 return
 
-            result = FunService.daily_fortune(interaction.user.id, interaction.guild_id)
+            global_settings = await self.store.get_global_settings()
+            result = FunService.daily_fortune(
+                interaction.user.id,
+                interaction.guild_id,
+                config=self._get_fun_payload(global_settings),
+            )
             await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "fortune_calls")
             await interaction.response.send_message(
-                f"{interaction.user.mention} 今日运势 `{result['score']}/100`\n{result['text']}"
+                f"{interaction.user.mention} 今日运势评估：`{result['score']}/100`\n{result['text']}"
             )
 
-        @fun_group.command(name="roulette", description="玩一把轮盘")
-        async def fun_roulette(interaction: discord.Interaction) -> None:
-            guild_settings = await self._require_guild_settings(interaction)
-            if guild_settings is None:
-                return
-            if not guild_settings.fun_enabled:
-                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
-                return
-
-            result = FunService.roulette()
-            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "roulette_calls")
-            await interaction.response.send_message(
-                f"{interaction.user.mention} 扣下扳机……\n{result['text']} (弹仓位置: {result['chamber']}/6)"
-            )
-
-        @fun_group.command(name="coin", description="抛个硬币")
+        @fun_group.command(name="coin", description="把你的决策权外包给一枚硬币")
         async def fun_coin(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
@@ -375,32 +581,17 @@ class EntertainmentBot(commands.Bot):
                 await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
                 return
 
-            result = FunService.coinflip(interaction.user.id, interaction.guild_id)
+            global_settings = await self.store.get_global_settings()
+            result = FunService.coinflip(
+                interaction.user.id,
+                interaction.guild_id,
+                config=self._get_fun_payload(global_settings),
+            )
             await interaction.response.send_message(
                 f"{interaction.user.mention} {result['text']}\n结果：`{result['side']}`"
             )
 
-        @fun_group.command(name="choose", description="从多个选项里替你选一个")
-        @app_commands.describe(options="用 | 分隔多个选项，例如 火锅 | 烤肉 | 麻辣烫")
-        async def fun_choose(interaction: discord.Interaction, options: str) -> None:
-            guild_settings = await self._require_guild_settings(interaction)
-            if guild_settings is None:
-                return
-            if not guild_settings.fun_enabled:
-                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
-                return
-
-            try:
-                result = FunService.choose(options.split("|"), interaction.guild_id, interaction.user.id)
-            except ValueError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
-                return
-
-            await interaction.response.send_message(
-                f"{interaction.user.mention} 我替你做了决定：`{result['choice']}`"
-            )
-
-        @fun_group.command(name="eightball", description="问机器人一个是非题")
+        @fun_group.command(name="eightball", description="让系统对你的是非题做一次冷酷裁决")
         @app_commands.describe(question="例如：我今天该不该熬夜？")
         async def fun_eightball(interaction: discord.Interaction, question: str) -> None:
             guild_settings = await self._require_guild_settings(interaction)
@@ -410,12 +601,18 @@ class EntertainmentBot(commands.Bot):
                 await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
                 return
 
-            result = FunService.eight_ball(question, interaction.guild_id, interaction.user.id)
+            global_settings = await self.store.get_global_settings()
+            result = FunService.eight_ball(
+                question,
+                interaction.guild_id,
+                interaction.user.id,
+                config=self._get_fun_payload(global_settings),
+            )
             await interaction.response.send_message(
                 f"{interaction.user.mention} 问题：{question}\n回答：{result['answer']}"
             )
 
-        @fun_group.command(name="waifu", description="抽今日老婆/老公")
+        @fun_group.command(name="waifu", description="抽取你今天的 safe 二次元老婆")
         async def fun_waifu(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
@@ -424,38 +621,20 @@ class EntertainmentBot(commands.Bot):
                 await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
                 return
 
-            members = [member for member in interaction.guild.members if not member.bot]
-            target_id = FunService.pick_waifu(
-                [member.id for member in members],
-                interaction.guild_id,
-                interaction.user.id,
-                utcnow().strftime("%Y-%m-%d"),
-            )
-            if target_id is None:
-                await interaction.response.send_message("服务器里没有可选成员。", ephemeral=True)
-                return
-            target = interaction.guild.get_member(target_id)
-            await interaction.response.send_message(
-                f"{interaction.user.mention} 今日命中目标：{target.mention if target else target_id}"
-            )
-
-        @fun_group.command(name="lottery", description="今日抽签（升级版）")
-        async def fun_lottery(interaction: discord.Interaction) -> None:
-            guild_settings = await self._require_guild_settings(interaction)
-            if guild_settings is None:
-                return
-            if not guild_settings.fun_enabled:
-                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+            await interaction.response.defer(thinking=True)
+            try:
+                post = await self._fetch_daily_waifu_post(
+                    guild_settings=guild_settings,
+                    guild_id=interaction.guild_id,
+                    user_id=interaction.user.id,
+                )
+            except Exception as exc:
+                await interaction.followup.send(f"今日老婆抽取失败：{self._describe_error(exc)}")
                 return
 
-            result = FunService.lottery(interaction.user.id, interaction.guild_id)
-            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "lottery_calls")
-            await interaction.response.send_message(
-                f"{interaction.user.mention} 今日签运点数：`{result['roll']}`\n"
-                f"稀有度：`{result['rarity']}`\n{result['text']}\n{result['omen']}"
-            )
+            await interaction.followup.send(embed=self._build_waifu_embed(post, user_mention=interaction.user.mention))
 
-        @fun_group.command(name="ship", description="测一测两个人的电波同步率")
+        @fun_group.command(name="ship", description="测量两名测试对象的电波同步率")
         @app_commands.describe(member_a="第一个人", member_b="第二个人")
         async def fun_ship(
             interaction: discord.Interaction,
@@ -469,18 +648,49 @@ class EntertainmentBot(commands.Bot):
                 await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
                 return
 
+            global_settings = await self.store.get_global_settings()
             result = FunService.ship_score(
                 member_a.id,
                 member_b.id,
                 interaction.guild_id,
                 utcnow().strftime("%Y-%m-%d"),
+                config=self._get_fun_payload(global_settings),
             )
             await interaction.response.send_message(
                 f"{member_a.mention} x {member_b.mention}\n"
                 f"同步率：`{result['score']}%`\n{result['label']}"
             )
 
-        @fun_group.command(name="leaderboard", description="看排行榜")
+        @fun_group.command(name="duel", description="模拟两名测试对象之间的荒谬决斗")
+        @app_commands.describe(challenger="挑战者", defender="被挑战者")
+        async def fun_duel(
+            interaction: discord.Interaction,
+            challenger: discord.Member,
+            defender: discord.Member,
+        ) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+
+            global_settings = await self.store.get_global_settings()
+            result = FunService.duel(
+                challenger.id,
+                defender.id,
+                interaction.guild_id,
+                utcnow().strftime("%Y-%m-%d"),
+                config=self._get_fun_payload(global_settings),
+            )
+            winner = challenger if result["winner_id"] == challenger.id else defender
+            await interaction.response.send_message(
+                f"{challenger.mention} vs {defender.mention}\n"
+                f"胜者：{winner.mention}\n"
+                f"压制幅度：`{result['margin']}%`\n{result['flavor']}"
+            )
+
+        @fun_group.command(name="leaderboard", description="查看本群娱乐与事故贡献排行榜")
         async def fun_leaderboard(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
@@ -509,81 +719,144 @@ class EntertainmentBot(commands.Bot):
                 name = member.display_name if member else f"User {user_id}"
                 lines.append(
                     f"{index}. {name} | 警告 {stats.warnings} | 已交税 {stats.taxes_paid} | "
-                    f"AI {stats.ai_calls} | 色图 {stats.danbooru_calls} | 抽签 {stats.lottery_calls}"
+                    f"AI {stats.ai_calls} | 色图 {stats.danbooru_calls} | 运势 {stats.fortune_calls}"
                 )
             await interaction.response.send_message("\n".join(lines))
 
-        @config_group.command(name="view", description="查看本服务器配置")
+        @minecraft_group.command(name="bind", description="绑定你的 Minecraft 用户名")
+        @app_commands.describe(username="Minecraft 用户名，3-16 位字母、数字或下划线")
+        async def minecraft_bind(interaction: discord.Interaction, username: str) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            username = username.strip()
+            if not is_valid_minecraft_username(username):
+                await interaction.response.send_message("Minecraft 用户名必须是 3-16 位字母、数字或下划线。", ephemeral=True)
+                return
+            await self.store.set_minecraft_binding(interaction.guild_id, interaction.user.id, username)
+            await interaction.response.send_message(f"已绑定 Minecraft 用户名 `{username}`。", ephemeral=True)
+
+        @minecraft_group.command(name="unbind", description="解除你的 Minecraft 用户名绑定")
+        async def minecraft_unbind(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            removed = await self.store.remove_minecraft_binding(interaction.guild_id, interaction.user.id)
+            text = "已解除 Minecraft 用户名绑定。" if removed else "你还没有绑定 Minecraft 用户名。"
+            await interaction.response.send_message(text, ephemeral=True)
+
+        @minecraft_group.command(name="status", description="查看 Minecraft 互通状态")
+        async def minecraft_status(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None or interaction.guild_id is None:
+                return
+            binding = await self.store.get_minecraft_binding(interaction.guild_id, interaction.user.id)
+            channel = f"<#{guild_settings.minecraft_channel_id}>" if guild_settings.minecraft_channel_id else "未配置"
+            text = "\n".join(
+                [
+                    f"启用: `{guild_settings.minecraft_bridge_enabled}`",
+                    f"server_id: `{guild_settings.minecraft_server_id}`",
+                    f"频道: {channel}",
+                    f"你的绑定: `{binding or '未绑定'}`",
+                ]
+            )
+            await interaction.response.send_message(text, ephemeral=True)
+
+        @config_group.command(name="view", description="查看当前服务器与全局配置")
         async def config_view(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)
             if guild_settings is None:
                 return
-            text = "\n".join(
-                [
-                    f"`ai_enabled`: {guild_settings.ai_enabled}",
-                    f"`fun_enabled`: {guild_settings.fun_enabled}",
-                    f"`tax_enabled`: {guild_settings.tax_enabled}",
-                    f"`tax_channel_id`: {guild_settings.tax_channel_id}",
-                    f"`log_channel_id`: {guild_settings.log_channel_id}",
-                    f"`shit_emoji`: {guild_settings.shit_emoji}",
-                    f"`tax_required_images`: {guild_settings.tax_required_images}",
-                    f"`tax_payment_window_minutes`: {guild_settings.tax_payment_window_minutes}",
-                    f"`mute_hours`: {guild_settings.mute_hours}",
-                    f"`summary_limit`: {guild_settings.summary_limit}",
-                    f"`danbooru_default_tags`: {guild_settings.danbooru_default_tags}",
-                ]
-            )
-            await interaction.response.send_message(text, ephemeral=True)
-
-        @config_group.command(name="global_view", description="查看全局 AI 配置")
-        async def config_global_view(interaction: discord.Interaction) -> None:
-            if not interaction.user.guild_permissions.manage_guild:
-                await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
-                return
             global_settings = await self.store.get_global_settings()
-            text = "\n".join(
+            text = "\n\n".join(
                 [
-                    f"`chat_model_profile`: {global_settings.chat_model_profile}",
-                    f"`chat_fallback_profiles`: {global_settings.chat_fallback_profiles or '-'}",
-                    f"`draw_model_profile`: {global_settings.draw_model_profile}",
-                    f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
+                    "\n".join(
+                        [
+                            "[Guild]",
+                            f"`ai_enabled`: {guild_settings.ai_enabled}",
+                            f"`fun_enabled`: {guild_settings.fun_enabled}",
+                            f"`tax_enabled`: {guild_settings.tax_enabled}",
+                            f"`minecraft_bridge_enabled`: {guild_settings.minecraft_bridge_enabled}",
+                            f"`minecraft_server_id`: {guild_settings.minecraft_server_id}",
+                            f"`minecraft_server_address`: {guild_settings.minecraft_server_address}",
+                            f"`minecraft_channel_id`: {guild_settings.minecraft_channel_id}",
+                            f"`minecraft_allow_no_token`: {guild_settings.minecraft_allow_no_token}",
+                            f"`minecraft_max_message_length`: {guild_settings.minecraft_max_message_length}",
+                            f"`welcome_channel_id`: {guild_settings.welcome_channel_id}",
+                            f"`welcome_text`: {guild_settings.welcome_text}",
+                            f"`verification_channel_id`: {guild_settings.verification_channel_id}",
+                            f"`verification_role_id`: {guild_settings.verification_role_id}",
+                            f"`verification_question`: {guild_settings.verification_question}",
+                            f"`verification_answer`: {guild_settings.verification_answer}",
+                            f"`verification_success_text`: {guild_settings.verification_success_text}",
+                            f"`tax_channel_id`: {guild_settings.tax_channel_id}",
+                            f"`log_channel_id`: {guild_settings.log_channel_id}",
+                            f"`shit_emoji`: {guild_settings.shit_emoji}",
+                            f"`tax_required_images`: {guild_settings.tax_required_images}",
+                            f"`tax_payment_window_minutes`: {guild_settings.tax_payment_window_minutes}",
+                            f"`mute_hours`: {guild_settings.mute_hours}",
+                            f"`summary_limit`: {guild_settings.summary_limit}",
+                            f"`danbooru_default_tags`: {guild_settings.danbooru_default_tags}",
+                            f"`safe_image_site_profile`: {guild_settings.safe_image_site_profile}",
+                            f"`explicit_image_site_profile`: {guild_settings.explicit_image_site_profile}",
+                            f"`safe_image_default_tags`: {guild_settings.safe_image_default_tags or '-'}",
+                            f"`explicit_image_default_tags`: {guild_settings.explicit_image_default_tags or '-'}",
+                        ]
+                    ),
+                    "\n".join(
+                        [
+                            "[Global]",
+                            f"`persona_profile`: {getattr(global_settings, 'persona_profile', 'glados')}",
+                            f"`chat_model_profile`: {global_settings.chat_model_profile}",
+                            f"`chat_fallback_profiles`: {global_settings.chat_fallback_profiles or '-'}",
+                            f"`draw_model_profile`: {global_settings.draw_model_profile}",
+                            f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
+                            f"`max_chat_history`: {global_settings.max_chat_history}",
+                        ]
+                    ),
                 ]
             )
             await interaction.response.send_message(text, ephemeral=True)
 
-        @config_group.command(name="global_set", description="修改全局 AI 配置")
-        @app_commands.describe(key="全局配置项名", value="配置值")
-        async def config_global_set(interaction: discord.Interaction, key: str, value: str) -> None:
-            if not interaction.user.guild_permissions.manage_guild:
-                await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
-                return
-            if key not in GLOBAL_SETTING_SPECS:
-                await interaction.response.send_message(
-                    f"未知全局配置项。可选：{', '.join(GLOBAL_SETTING_SPECS.keys())}",
-                    ephemeral=True,
-                )
-                return
-            try:
-                cast_value = cast_setting_value(GLOBAL_SETTING_SPECS, key, value)
-            except Exception as exc:
-                await interaction.response.send_message(f"配置值不合法：{exc}", ephemeral=True)
-                return
-
-            settings = await self.store.update_global_settings({key: cast_value})
-            await interaction.response.send_message(
-                f"已更新全局 `{key}` -> `{getattr(settings, key)}`",
-                ephemeral=True,
-            )
-
-        @config_group.command(name="set", description="设置某个配置项")
+        @config_group.command(name="set", description="按 key 自动修改服务器或全局配置")
         @app_commands.describe(key="配置项名", value="配置值")
         async def config_set(interaction: discord.Interaction, key: str, value: str) -> None:
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
                 return
+            in_global = key in GLOBAL_SETTING_SPECS
+            in_guild = key in GUILD_SETTING_SPECS
+            if not in_global and not in_guild:
+                await interaction.response.send_message(
+                    "未知配置项。可选全局："
+                    f"{', '.join(GLOBAL_SETTING_SPECS.keys())}\n可选服务器：{', '.join(GUILD_SETTING_SPECS.keys())}",
+                    ephemeral=True,
+                )
+                return
+            if in_global and in_guild:
+                await interaction.response.send_message(f"配置项 `{key}` 存在歧义，暂时不能自动分流。", ephemeral=True)
+                return
+            if in_global:
+                if key not in GLOBAL_SETTING_SPECS:
+                    await interaction.response.send_message(
+                        f"未知全局配置项。可选：{', '.join(GLOBAL_SETTING_SPECS.keys())}",
+                        ephemeral=True,
+                    )
+                    return
+                try:
+                    cast_value = cast_setting_value(GLOBAL_SETTING_SPECS, key, value)
+                except Exception as exc:
+                    await interaction.response.send_message(f"配置值不合法：{exc}", ephemeral=True)
+                    return
+                settings = await self.store.update_global_settings({key: cast_value})
+                await interaction.response.send_message(
+                    f"已更新全局 `{key}` -> `{getattr(settings, key)}`",
+                    ephemeral=True,
+                )
+                return
             if key not in GUILD_SETTING_SPECS:
                 await interaction.response.send_message(
-                    f"未知配置项。可选：{', '.join(GUILD_SETTING_SPECS.keys())}",
+                    f"未知服务器配置项。可选：{', '.join(GUILD_SETTING_SPECS.keys())}",
                     ephemeral=True,
                 )
                 return
@@ -603,25 +876,73 @@ class EntertainmentBot(commands.Bot):
                 ephemeral=True,
             )
 
-        @config_group.command(name="tax_channel", description="设置税务频道")
-        @app_commands.describe(channel="要作为补税频道的频道")
-        async def config_tax_channel(
-            interaction: discord.Interaction,
-            channel: discord.TextChannel,
-        ) -> None:
-            if not interaction.user.guild_permissions.manage_guild:
-                await interaction.response.send_message("需要管理服务器权限。", ephemeral=True)
+        @app_commands.context_menu(name="GLaDOS 改图")
+        async def message_redraw(interaction: discord.Interaction, target: discord.Message) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
                 return
-            await self.store.update_guild_settings(
-                interaction.guild_id,
-                {"tax_channel_id": channel.id},
-                guild_name=interaction.guild.name,
-            )
-            await interaction.response.send_message(f"税务频道已设置为 {channel.mention}", ephemeral=True)
+            if not guild_settings.ai_enabled:
+                await interaction.response.send_message("这个服务器没有开启 AI 功能。", ephemeral=True)
+                return
+
+            urls = self._extract_image_urls_from_message(target)
+            if not urls:
+                await interaction.response.send_message("这条消息里没有可用图片。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True)
+            global_settings = await self.store.get_global_settings()
+            prompt_text = target.content.strip() or "请基于提供的图片做一次高质量改图，保留主体、角色特征和关键细节。"
+            try:
+                result = await self.openrouter.draw(
+                    prompt=prompt_text,
+                    profile=getattr(global_settings, "draw_model_profile", "legacy-draw"),
+                    fallback_profiles=getattr(global_settings, "draw_fallback_profiles", ""),
+                    size="1:1",
+                    variants=1,
+                    urls=urls,
+                )
+                resolved = await self._await_draw_completion(result)
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"绘图失败：{self._describe_error(exc)}")
+                return
+
+            images = self._extract_draw_result_urls(resolved)
+            if not images:
+                await interaction.followup.send(f"绘图任务回来了，但没吐出图片地址：{resolved}")
+                return
+
+            await self.store.increment_user_stat(interaction.guild_id, interaction.user.id, "ai_calls")
+            await interaction.followup.send("\n".join(images))
+
+        @app_commands.context_menu(name="GLaDOS 搜图")
+        async def message_sauce(interaction: discord.Interaction, target: discord.Message) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.fun_enabled:
+                await interaction.response.send_message("这个服务器没有开启娱乐功能。", ephemeral=True)
+                return
+
+            image_urls = self._extract_image_urls_from_message(target)
+            if not image_urls:
+                await interaction.response.send_message("这条消息里没有可用图片。", ephemeral=True)
+                return
+
+            await interaction.response.defer(thinking=True, ephemeral=True)
+            try:
+                payload = await self.saucenao.search(image_urls[0])
+            except Exception as exc:  # pragma: no cover - network bound
+                await interaction.followup.send(f"SauceNAO 搜图失败：{self._describe_error(exc)}", ephemeral=True)
+                return
+            await interaction.followup.send(embed=self._build_saucenao_embed(payload, image_urls[0]), ephemeral=True)
 
         self.tree.add_command(ai_group)
         self.tree.add_command(fun_group)
+        self.tree.add_command(minecraft_group)
         self.tree.add_command(config_group)
+        self.tree.add_command(message_redraw)
+        self.tree.add_command(message_sauce)
 
     async def _require_guild_settings(
         self,
@@ -649,9 +970,26 @@ class EntertainmentBot(commands.Bot):
         history.reverse()
         return history
 
-    @staticmethod
-    def _compose_ai_system_prompt(base_prompt: str) -> str:
-        return f"{base_prompt}\n{BOT_THINKING_GUARD}"
+    def _get_persona_payload(self, persona_profile: str | None) -> dict[str, object]:
+        return self.personas.get_persona(persona_profile)
+
+    def _get_fun_payload(self, global_settings) -> dict[str, object]:
+        persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
+        fun_payload = persona.get("fun")
+        return fun_payload if isinstance(fun_payload, dict) else {}
+
+    def _resolve_system_prompt(self, global_settings) -> str:
+        persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
+        return str(persona.get("system_prompt", "")).strip()
+
+    def _resolve_summary_prompt(self, global_settings) -> str:
+        persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
+        return str(persona.get("summary_system_prompt", "")).strip()
+
+    def _compose_ai_system_prompt(self, base_prompt: str, global_settings) -> str:
+        persona = self._get_persona_payload(getattr(global_settings, "persona_profile", "glados"))
+        thinking_guard = str(persona.get("thinking_guard", "")).strip() or BOT_THINKING_GUARD
+        return f"{base_prompt}\n{thinking_guard}"
 
     async def _resolve_referenced_message(self, message: discord.Message) -> discord.Message | None:
         if not message.reference:
@@ -710,12 +1048,34 @@ class EntertainmentBot(commands.Bot):
             settings=settings,
         )
 
+    async def on_member_join(self, member: discord.Member) -> None:
+        settings = await self.store.get_guild_settings(member.guild.id, member.guild.name)
+        if settings.welcome_channel_id:
+            channel = member.guild.get_channel(settings.welcome_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                welcome_text = settings.welcome_text.format(
+                    user_mention=member.mention,
+                    guild_name=member.guild.name,
+                )
+                await channel.send(welcome_text)
+
+        if settings.verification_channel_id and settings.verification_role_id:
+            channel = member.guild.get_channel(settings.verification_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                await channel.send(
+                    f"{member.mention} 验证问题：{settings.verification_question}\n"
+                    "回答正确后会自动发放身份组。"
+                )
+
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or message.guild is None:
             return
 
         settings = await self.store.get_guild_settings(message.guild.id, message.guild.name)
         referenced = await self._resolve_referenced_message(message)
+
+        if await self._handle_verification_message(message, settings):
+            return
 
         if await self._is_admin_tax_reply_trigger(message, settings):
             if isinstance(referenced, discord.Message) and isinstance(message.channel, discord.TextChannel):
@@ -747,6 +1107,8 @@ class EntertainmentBot(commands.Bot):
                         mention_author=False,
                     )
 
+        await self._try_forward_discord_to_minecraft(message, settings)
+
         if settings.ai_enabled and await self._is_direct_ai_trigger(message):
             prompt = self._extract_direct_ai_prompt(message)
             image_urls = self._extract_image_urls_from_message(message)
@@ -767,7 +1129,10 @@ class EntertainmentBot(commands.Bot):
             messages = [
                 {
                     "role": "system",
-                    "content": self._compose_ai_system_prompt(global_settings.system_prompt),
+                    "content": self._compose_ai_system_prompt(
+                        self._resolve_system_prompt(global_settings),
+                        global_settings,
+                    ),
                 }
             ]
             messages.extend(await self._build_reference_context_messages(message, referenced))
@@ -797,6 +1162,16 @@ class EntertainmentBot(commands.Bot):
             return
 
         await self.process_commands(message)
+
+    async def _try_forward_discord_to_minecraft(self, message: discord.Message, settings: GuildSettings) -> bool:
+        bridge = self.minecraft_bridge
+        if bridge is None:
+            return False
+        try:
+            return await bridge.enqueue_discord_message(message, settings)
+        except Exception:
+            LOGGER.exception("Failed to enqueue Discord message for Minecraft bridge")
+            return False
 
     @tasks.loop(minutes=1)
     async def tax_deadline_watcher(self) -> None:
@@ -892,6 +1267,46 @@ class EntertainmentBot(commands.Bot):
             return False
         normalized = re.sub(r"\s+", "", (message.content or "").strip())
         return normalized in TAX_REPLY_KEYWORDS or normalized.startswith("税")
+
+    async def _handle_verification_message(self, message: discord.Message, settings: GuildSettings) -> bool:
+        if not settings.verification_channel_id or not settings.verification_role_id:
+            return False
+        if message.channel.id != settings.verification_channel_id:
+            return False
+
+        member = message.author if isinstance(message.author, discord.Member) else message.guild.get_member(message.author.id)
+        if member is None:
+            return False
+        role = message.guild.get_role(settings.verification_role_id)
+        if role is None:
+            return False
+        if role in member.roles:
+            return False
+
+        expected = self._normalize_verification_answer(settings.verification_answer)
+        received = self._normalize_verification_answer(message.content or "")
+        if not received:
+            return False
+        if received != expected:
+            await message.reply("答案不对。再试一次。", mention_author=False)
+            return True
+
+        try:
+            await member.add_roles(role, reason="答题验证通过")
+        except discord.HTTPException:
+            await message.reply("身份组发放失败。请检查机器人权限和身份组层级。", mention_author=False)
+            return True
+
+        success_text = settings.verification_success_text.format(
+            user_mention=member.mention,
+            role_mention=role.mention,
+        )
+        await message.reply(success_text, mention_author=False)
+        return True
+
+    @staticmethod
+    def _normalize_verification_answer(text: str) -> str:
+        return re.sub(r"\s+", "", (text or "").strip()).lower()
 
     @staticmethod
     def _message_has_image(message: discord.Message) -> bool:
@@ -1011,11 +1426,96 @@ class EntertainmentBot(commands.Bot):
         return [{"role": "user", "content": content}]
 
     @staticmethod
-    def _compose_danbooru_tags(base_tags: str, extra_tags: str, forced_rating: str) -> str:
-        merged = " ".join(part.strip() for part in [base_tags, extra_tags] if part.strip())
+    def _normalize_image_style(style: str | None) -> str | None:
+        lowered = (style or "").strip().lower()
+        if lowered in {"safe", "pretty", "sfw", "美图"}:
+            return "safe"
+        if lowered in {"explicit", "lewd", "nsfw", "涩图", "色图"}:
+            return "explicit"
+        return None
+
+    @staticmethod
+    def _merge_image_tags(*parts: str) -> str:
+        merged = " ".join(part.strip() for part in parts if part and part.strip())
         cleaned = RATING_TAG_RE.sub("", merged)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        return f"{forced_rating} {cleaned}".strip()
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    @staticmethod
+    def _legacy_image_tags(guild_settings: GuildSettings) -> str:
+        return re.sub(r"\s+", " ", RATING_TAG_RE.sub("", guild_settings.danbooru_default_tags)).strip()
+
+    async def _resolve_effective_image_preferences(
+        self,
+        guild_id: int,
+        user_id: int,
+        guild_settings: GuildSettings,
+    ) -> tuple[UserImagePreferences, str, str]:
+        preferences = await self.store.get_user_preferences(guild_id, user_id)
+        safe_profile = preferences.safe_image_site_profile or guild_settings.safe_image_site_profile or "danbooru"
+        explicit_profile = preferences.explicit_image_site_profile or guild_settings.explicit_image_site_profile or "danbooru"
+        return preferences, safe_profile, explicit_profile
+
+    async def _fetch_image_post(
+        self,
+        *,
+        guild_settings: GuildSettings,
+        guild_id: int,
+        user_id: int,
+        rating_mode: str,
+        extra_tags: str,
+        profile_override: str | None = None,
+        selection_key: str | None = None,
+    ) -> dict[str, object]:
+        preferences, safe_profile, explicit_profile = await self._resolve_effective_image_preferences(
+            guild_id,
+            user_id,
+            guild_settings,
+        )
+        profile = profile_override or (safe_profile if rating_mode == "safe" else explicit_profile)
+        base_tags = (
+            preferences.safe_image_tags or guild_settings.safe_image_default_tags or self._legacy_image_tags(guild_settings)
+            if rating_mode == "safe"
+            else preferences.explicit_image_tags or guild_settings.explicit_image_default_tags or self._legacy_image_tags(guild_settings)
+        )
+        return await self.image_sources.random_post(
+            profile=profile,
+            rating_mode=rating_mode,
+            base_tags=base_tags,
+            extra_tags=extra_tags,
+            selection_key=selection_key,
+        )
+
+    async def _build_image_response_embed(
+        self,
+        *,
+        guild_settings: GuildSettings,
+        guild_id: int,
+        user_id: int,
+        rating_mode: str,
+        extra_tags: str,
+        profile_override: str | None = None,
+    ) -> discord.Embed:
+        post = await self._fetch_image_post(
+            guild_settings=guild_settings,
+            guild_id=guild_id,
+            user_id=user_id,
+            rating_mode=rating_mode,
+            extra_tags=extra_tags,
+            profile_override=profile_override,
+        )
+        return self._build_image_embed(post)
+
+    async def _fetch_daily_waifu_post(
+        self,
+        *,
+        guild_settings: GuildSettings,
+        guild_id: int,
+        user_id: int,
+    ) -> dict[str, object]:
+        return await self.image_sources.character_post(
+            profile="danbooru",
+            rating_mode="safe",
+        )
 
     async def _handle_direct_bot_command(
         self,
@@ -1039,10 +1539,10 @@ class EntertainmentBot(commands.Bot):
 
         explicit_tags = self._extract_direct_image_tags(prompt, EXPLICIT_IMAGE_KEYWORDS)
         if explicit_tags is not None:
-            await self._handle_direct_danbooru(
+            await self._handle_direct_image_request(
                 message,
                 guild_settings=guild_settings,
-                forced_rating="rating:e",
+                rating_mode="explicit",
                 extra_tags=explicit_tags,
                 nsfw_required=True,
             )
@@ -1050,17 +1550,25 @@ class EntertainmentBot(commands.Bot):
 
         safe_tags = self._extract_direct_image_tags(prompt, SAFE_IMAGE_KEYWORDS)
         if safe_tags is not None:
-            await self._handle_direct_danbooru(
+            await self._handle_direct_image_request(
                 message,
                 guild_settings=guild_settings,
-                forced_rating="rating:s",
+                rating_mode="safe",
                 extra_tags=safe_tags,
                 nsfw_required=False,
             )
             return True
 
+        if self._is_direct_sauce_request(prompt):
+            await self._handle_direct_saucenao(message, referenced=referenced)
+            return True
+
         if any(keyword in normalized for keyword in ("今日运势", "运势")):
-            result = FunService.daily_fortune(message.author.id, message.guild.id)
+            result = FunService.daily_fortune(
+                message.author.id,
+                message.guild.id,
+                config=self._get_fun_payload(global_settings),
+            )
             await self.store.increment_user_stat(message.guild.id, message.author.id, "fortune_calls")
             await message.reply(
                 f"{message.author.mention} 今日运势 `{result['score']}/100`\n{result['text']}",
@@ -1068,65 +1576,29 @@ class EntertainmentBot(commands.Bot):
             )
             return True
 
-        if any(keyword in normalized for keyword in ("轮盘", "roulette")):
-            result = FunService.roulette()
-            await self.store.increment_user_stat(message.guild.id, message.author.id, "roulette_calls")
-            await message.reply(
-                f"{message.author.mention} 扣下扳机……\n{result['text']} (弹仓位置: {result['chamber']}/6)",
-                mention_author=False,
-            )
-            return True
-
         if any(keyword in normalized for keyword in ("抛硬币", "硬币", "coin")):
-            result = FunService.coinflip(message.author.id, message.guild.id)
+            result = FunService.coinflip(
+                message.author.id,
+                message.guild.id,
+                config=self._get_fun_payload(global_settings),
+            )
             await message.reply(
                 f"{message.author.mention} {result['text']}\n结果：`{result['side']}`",
                 mention_author=False,
             )
             return True
 
-        if any(keyword in normalized for keyword in ("抽签", "签运")):
-            result = FunService.lottery(message.author.id, message.guild.id)
-            await self.store.increment_user_stat(message.guild.id, message.author.id, "lottery_calls")
-            await message.reply(
-                f"{message.author.mention} 今日签运点数：`{result['roll']}`\n"
-                f"稀有度：`{result['rarity']}`\n{result['text']}\n{result['omen']}",
-                mention_author=False,
-            )
-            return True
-
         if any(keyword in normalized for keyword in ("老婆", "老公", "waifu")):
-            members = [member for member in message.guild.members if not member.bot]
-            target_id = FunService.pick_waifu(
-                [member.id for member in members],
-                message.guild.id,
-                message.author.id,
-                utcnow().strftime("%Y-%m-%d"),
-            )
-            if target_id is None:
-                await message.reply("服务器里没有可选成员。", mention_author=False)
-                return True
-            target = message.guild.get_member(target_id)
-            await message.reply(
-                f"{message.author.mention} 今日命中目标：{target.mention if target else target_id}",
-                mention_author=False,
-            )
-            return True
-
-        if choose_options := self._parse_direct_choose_options(prompt):
-            try:
-                result = FunService.choose(choose_options, message.guild.id, message.author.id)
-            except ValueError as exc:
-                await message.reply(str(exc), mention_author=False)
-                return True
-            await message.reply(
-                f"{message.author.mention} 我替你做了决定：`{result['choice']}`",
-                mention_author=False,
-            )
+            await self._handle_waifu_image(message, guild_settings=guild_settings)
             return True
 
         if self._is_direct_eightball(prompt):
-            result = FunService.eight_ball(prompt, message.guild.id, message.author.id)
+            result = FunService.eight_ball(
+                prompt,
+                message.guild.id,
+                message.author.id,
+                config=self._get_fun_payload(global_settings),
+            )
             await message.reply(
                 f"{message.author.mention} 回答：{result['answer']}",
                 mention_author=False,
@@ -1134,6 +1606,27 @@ class EntertainmentBot(commands.Bot):
             return True
 
         return False
+
+    async def _handle_waifu_image(
+        self,
+        message: discord.Message,
+        *,
+        guild_settings: GuildSettings,
+    ) -> None:
+        try:
+            post = await self._fetch_daily_waifu_post(
+                guild_settings=guild_settings,
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+            )
+        except Exception as exc:
+            await message.reply(f"今日老婆抽取失败：{self._describe_error(exc)}", mention_author=False)
+            return
+
+        await message.reply(
+            embed=self._build_waifu_embed(post, user_mention=message.author.mention),
+            mention_author=False,
+        )
 
     async def _handle_direct_draw(
         self,
@@ -1180,12 +1673,12 @@ class EntertainmentBot(commands.Bot):
             header_parts.append(str(resolved["_warning"]))
         await self._reply_in_chunks(message, "\n".join([" | ".join(header_parts), *images]))
 
-    async def _handle_direct_danbooru(
+    async def _handle_direct_image_request(
         self,
         message: discord.Message,
         *,
         guild_settings: GuildSettings,
-        forced_rating: str,
+        rating_mode: str,
         extra_tags: str,
         nsfw_required: bool,
     ) -> None:
@@ -1194,32 +1687,25 @@ class EntertainmentBot(commands.Bot):
             return
 
         try:
-            post = await self._fetch_danbooru_post(guild_settings, extra_tags, forced_rating=forced_rating)
+            post = await self._fetch_image_post(
+                guild_settings=guild_settings,
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+                rating_mode=rating_mode,
+                extra_tags=extra_tags,
+            )
         except Exception as exc:
-            await message.reply(f"Danbooru 请求失败：{self._describe_error(exc)}", mention_author=False)
+            await message.reply(f"图站请求失败：{self._describe_error(exc)}", mention_author=False)
             return
 
         await self.store.increment_user_stat(message.guild.id, message.author.id, "danbooru_calls")
-        await message.reply(embed=self._build_danbooru_embed(post), mention_author=False)
-
-    async def _fetch_danbooru_post(
-        self,
-        guild_settings: GuildSettings,
-        extra_tags: str,
-        *,
-        forced_rating: str,
-    ) -> dict[str, object]:
-        search_tags = self._compose_danbooru_tags(
-            guild_settings.danbooru_default_tags,
-            extra_tags,
-            forced_rating,
-        )
-        return await self.danbooru.random_post(search_tags)
+        await message.reply(embed=self._build_image_embed(post), mention_author=False)
 
     @staticmethod
-    def _build_danbooru_embed(post: dict[str, object]) -> discord.Embed:
+    def _build_image_embed(post: dict[str, object]) -> discord.Embed:
+        site_label = str(post.get("site_label") or post.get("site") or "Image")
         embed = discord.Embed(
-            title=f"Danbooru #{post['id']}",
+            title=f"{site_label} #{post['id']}",
             description=f"rating: `{post['rating']}`\n[查看原帖]({post['post_url']})",
             color=discord.Color.blurple(),
         )
@@ -1227,6 +1713,116 @@ class EntertainmentBot(commands.Bot):
             embed.set_image(url=str(post["file_url"]))
         tags_text = str(post.get("tags") or "无标签")[:900]
         embed.add_field(name="Tags", value=tags_text, inline=False)
+        return embed
+
+    @staticmethod
+    def _build_waifu_embed(
+        post: dict[str, object],
+        *,
+        user_mention: str,
+    ) -> discord.Embed:
+        copyright_text = str(post.get("copyrights") or "").strip()
+        character_text = str(post.get("characters") or "").strip()
+        if copyright_text and character_text:
+            origin = f"《{copyright_text.split(' ')[0].replace('_', ' ')}》的 {character_text.split(' ')[0].replace('_', ' ')}"
+        elif copyright_text:
+            origin = f"《{copyright_text.split(' ')[0].replace('_', ' ')}》"
+        elif character_text:
+            origin = character_text.split(" ")[0].replace("_", " ")
+        else:
+            origin = "未知作品 / 未知角色"
+
+        title = "今日老婆"
+        description = f"{user_mention}，系统为你分配的安全二次元样本来自 {origin}。"
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.pink(),
+        )
+        if post.get("file_url"):
+            embed.set_image(url=str(post["file_url"]))
+        tags = str(post.get("tags") or "").split()
+        tag_line = " ".join(tags[:12]) if tags else "无标签"
+        embed.add_field(name="标签", value=tag_line[:900], inline=False)
+        embed.add_field(name="来源", value=f"[查看原帖]({post['post_url']})", inline=False)
+        return embed
+
+    async def _handle_direct_saucenao(
+        self,
+        message: discord.Message,
+        *,
+        referenced: discord.Message | None,
+    ) -> None:
+        image_urls = self._extract_image_urls_from_message(message)
+        if referenced is not None:
+            for image_url in self._extract_image_urls_from_message(referenced):
+                if image_url not in image_urls:
+                    image_urls.append(image_url)
+        if not image_urls:
+            await message.reply("你要我搜图，总得给我一张图。可以直接带图，或者回复一条带图消息。", mention_author=False)
+            return
+
+        try:
+            payload = await self.saucenao.search(image_urls[0])
+        except Exception as exc:
+            await message.reply(f"SauceNAO 搜图失败：{self._describe_error(exc)}", mention_author=False)
+            return
+        await message.reply(embed=self._build_saucenao_embed(payload, image_urls[0]), mention_author=False)
+
+    @staticmethod
+    def _build_saucenao_embed(payload: dict[str, object], image_url: str) -> discord.Embed:
+        header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        embed = discord.Embed(
+            title="SauceNAO 反查结果",
+            description=f"原图: [点击查看]({image_url})",
+            color=discord.Color.orange(),
+        )
+        if results:
+            top = results[0] if isinstance(results[0], dict) else {}
+            top_header = top.get("header") if isinstance(top.get("header"), dict) else {}
+            top_data = top.get("data") if isinstance(top.get("data"), dict) else {}
+            similarity = top_header.get("similarity", "?")
+            title = (
+                top_data.get("title")
+                or top_data.get("eng_name")
+                or top_data.get("source")
+                or top_data.get("creator")
+                or "未命名结果"
+            )
+            index_name = top_header.get("index_name", "未知索引")
+            ext_urls = [str(item) for item in top_data.get("ext_urls", []) if isinstance(item, str)]
+            if top_header.get("thumbnail"):
+                embed.set_thumbnail(url=str(top_header["thumbnail"]))
+            embed.add_field(
+                name="最佳匹配",
+                value=f"`{title}`\n相似度: `{similarity}%`\n来源库: `{index_name}`",
+                inline=False,
+            )
+            if ext_urls:
+                embed.add_field(name="外链", value="\n".join(ext_urls[:3]), inline=False)
+
+        short_results = []
+        for item in results[:5]:
+            if not isinstance(item, dict):
+                continue
+            item_header = item.get("header") if isinstance(item.get("header"), dict) else {}
+            item_data = item.get("data") if isinstance(item.get("data"), dict) else {}
+            similarity = item_header.get("similarity", "?")
+            title = (
+                item_data.get("title")
+                or item_data.get("eng_name")
+                or item_data.get("source")
+                or item_data.get("creator")
+                or "未命名结果"
+            )
+            short_results.append(f"{similarity}% | {title}")
+        if short_results:
+            embed.add_field(name="候选结果", value="\n".join(short_results), inline=False)
+
+        status = header.get("status")
+        if status is not None:
+            embed.set_footer(text=f"status={status}")
         return embed
 
     @staticmethod
@@ -1256,16 +1852,9 @@ class EntertainmentBot(commands.Bot):
         return None
 
     @staticmethod
-    def _parse_direct_choose_options(prompt: str) -> list[str] | None:
-        trimmed = (prompt or "").strip()
-        lowered = trimmed.lower()
-        if lowered.startswith("choose"):
-            body = trimmed[6:].strip(" ：:-")
-            return [item.strip() for item in body.split("|") if item.strip()]
-        if trimmed.startswith("选一个"):
-            body = trimmed[3:].strip(" ：:-")
-            return [item.strip() for item in body.split("|") if item.strip()]
-        return None
+    def _is_direct_sauce_request(prompt: str) -> bool:
+        trimmed = (prompt or "").strip().lower()
+        return trimmed.startswith("搜图") or trimmed.startswith("sauce") or trimmed.startswith("source")
 
     @staticmethod
     def _is_direct_eightball(prompt: str) -> bool:

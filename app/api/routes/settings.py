@@ -18,6 +18,8 @@ async def dashboard(request: Request, guild_id: int | None = Query(default=None)
         "health": await request.app.state.health_provider(request),
         "catalog": get_setting_catalog(),
         "providers": request.app.state.openrouter.list_providers(),
+        "image_profiles": request.app.state.image_sources.list_profiles(),
+        "personas": request.app.state.personas.list_profiles(),
         "global_settings": snapshot.global_settings.model_dump(),
         "guilds": {
             guild_key: guild_settings.model_dump()
@@ -32,6 +34,13 @@ async def dashboard(request: Request, guild_id: int | None = Query(default=None)
         "stats": {
             guild_key: guild_stats.model_dump()
             for guild_key, guild_stats in snapshot.stats.items()
+        },
+        "user_preferences": {
+            guild_key: {
+                user_key: prefs.model_dump()
+                for user_key, prefs in guild_prefs.items()
+            }
+            for guild_key, guild_prefs in snapshot.user_preferences.items()
         },
     }
 
@@ -93,3 +102,9 @@ async def get_stats(request: Request, guild_id: int) -> dict[str, object]:
     snapshot = await request.app.state.store.get_snapshot()
     stats = snapshot.stats.get(str(guild_id))
     return stats.model_dump() if stats else {"total_tax_cases": 0, "user_stats": {}}
+
+
+@router.get("/preferences/{guild_id}/{user_id}")
+async def get_user_preferences(request: Request, guild_id: int, user_id: int) -> dict[str, object]:
+    preferences = await request.app.state.store.get_user_preferences(guild_id, user_id)
+    return preferences.model_dump()

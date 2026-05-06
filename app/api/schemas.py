@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SettingsPatchRequest(BaseModel):
@@ -11,7 +11,6 @@ class SettingsPatchRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str
-    system_prompt: str | None = None
     model: str | None = None
     profile: str | None = None
     fallback_profiles: str | None = None
@@ -34,7 +33,7 @@ class SummaryRequest(BaseModel):
 
 
 class DrawRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     model: str | None = None
     profile: str | None = None
     fallback_profiles: str | None = None
@@ -49,3 +48,41 @@ class DrawResultRequest(BaseModel):
     id: str
     profile: str | None = None
     provider: str | None = None
+
+
+class MinecraftChatEvent(BaseModel):
+    server_id: str = Field(default="default", max_length=64)
+    player_uuid: str = Field(max_length=64)
+    player_name: str = Field(max_length=16)
+    message: str = Field(max_length=500)
+    world: str | None = Field(default=None, max_length=64)
+
+    @field_validator("server_id", "player_uuid", "player_name", "message", "world", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        if value is None:
+            return None
+        return str(value).strip()
+
+
+class MinecraftQueuedMessage(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    discord_user_id: str
+    content: str
+    created_at: str
+
+
+class MinecraftMessagesResponse(BaseModel):
+    messages: list[MinecraftQueuedMessage] = Field(default_factory=list)
+    next_after: int = 0
+
+
+class MinecraftBindingRequest(BaseModel):
+    username: str = Field(max_length=16)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def trim_username(cls, value):
+        return str(value).strip()

@@ -15,6 +15,7 @@ class EnvSettings(BaseSettings):
     discord_test_guild_id: int | None = Field(default=None, alias="DISCORD_TEST_GUILD_ID")
 
     ai_provider_file: Path = Field(default=BASE_DIR / "data" / "providers.json", alias="AI_PROVIDER_FILE")
+    persona_file: Path = Field(default=BASE_DIR / "data" / "personas.json", alias="PERSONA_FILE")
     ai_chat_provider: str = Field(default="legacy", alias="AI_CHAT_PROVIDER")
     ai_chat_fallbacks: str = Field(default="", alias="AI_CHAT_FALLBACKS")
     ai_draw_provider: str = Field(default="legacy", alias="AI_DRAW_PROVIDER")
@@ -41,19 +42,44 @@ class EnvSettings(BaseSettings):
     )
     danbooru_username: str | None = Field(default=None, alias="DANBOORU_USERNAME")
     danbooru_api_key: str | None = Field(default=None, alias="DANBOORU_API_KEY")
+    rule34_api_base_url: str = Field(
+        default="https://api.rule34.xxx",
+        alias="RULE34_API_BASE_URL",
+    )
+    rule34_post_base_url: str = Field(
+        default="https://rule34.xxx",
+        alias="RULE34_POST_BASE_URL",
+    )
+    rule34_user_id: str | None = Field(default=None, alias="RULE34_USER_ID")
+    rule34_api_key: str | None = Field(default=None, alias="RULE34_API_KEY")
+    saucenao_base_url: str = Field(
+        default="https://saucenao.com/search.php",
+        alias="SAUCENAO_BASE_URL",
+    )
+    saucenao_api_key: str | None = Field(default=None, alias="SAUCENAO_API_KEY")
 
     state_file: Path = Field(default=BASE_DIR / "data" / "state.json", alias="STATE_FILE")
     host: str = Field(default="127.0.0.1", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
 
+    minecraft_bridge_enabled: bool = Field(default=False, alias="MINECRAFT_BRIDGE_ENABLED")
+    minecraft_guild_id: int | None = Field(default=None, alias="MINECRAFT_GUILD_ID")
+    minecraft_server_id: str = Field(default="default", alias="MINECRAFT_SERVER_ID")
+    minecraft_server_address: str = Field(default="", alias="MINECRAFT_SERVER_ADDRESS")
+    minecraft_channel_id: int | None = Field(default=None, alias="MINECRAFT_CHANNEL_ID")
+    minecraft_token: str = Field(default="", alias="MINECRAFT_TOKEN")
+    minecraft_allow_no_token: bool = Field(default=True, alias="MINECRAFT_ALLOW_NO_TOKEN")
+    minecraft_allowed_clients: str = Field(default="", alias="MINECRAFT_ALLOWED_CLIENTS")
+    minecraft_max_message_length: int = Field(default=300, alias="MINECRAFT_MAX_MESSAGE_LENGTH")
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
         populate_by_name=True,
     )
 
-    @field_validator("discord_test_guild_id", mode="before")
+    @field_validator("discord_test_guild_id", "minecraft_guild_id", "minecraft_channel_id", mode="before")
     @classmethod
     def empty_string_to_none(cls, value):
         if value in {"", None}:
@@ -68,4 +94,6 @@ def get_env_settings() -> EnvSettings:
         settings.state_file = BASE_DIR / settings.state_file
     if not settings.ai_provider_file.is_absolute():
         settings.ai_provider_file = BASE_DIR / settings.ai_provider_file
+    if not settings.persona_file.is_absolute():
+        settings.persona_file = BASE_DIR / settings.persona_file
     return settings

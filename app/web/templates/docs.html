@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DC Bot Docs</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">DC Bot Docs</p>
+        <h1>命令与权限文档</h1>
+        <p class="lead">普通用户、管理员、图站档案、模型档案都放在这里。这样你就不用靠猜。</p>
+      </div>
+      <a class="button" href="/dashboard">回控制台</a>
+    </section>
+
+    <section class="grid">
+      <article class="card wide">
+        <h2>普通用户命令</h2>
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>命令</th>
+                <th>入口</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in user_commands %}
+              <tr>
+                <td>{{ item.name }}</td>
+                <td>{{ item.entrypoints | join(" / ") }}</td>
+                <td>{{ item.description }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <h2>管理员命令</h2>
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>命令</th>
+                <th>入口</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in admin_commands %}
+              <tr>
+                <td>{{ item.name }}</td>
+                <td>{{ item.entrypoints | join(" / ") }}</td>
+                <td>{{ item.description }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <h2>不用 Slash 也能做什么</h2>
+        <pre>@GLaDOS 你好
+回复 GLaDOS：继续
+@GLaDOS draw 一只猫娘
+回复一张图：@GLaDOS 改图，换成赛博风
+@GLaDOS 来张美图
+@GLaDOS 来张色图
+@GLaDOS 搜图
+@GLaDOS 今日运势
+@GLaDOS 抛硬币
+@GLaDOS 8ball 我今天该不该熬夜
+@GLaDOS 老婆</pre>
+      </article>
+
+      <article class="card">
+        <h2>图站档案</h2>
+        <pre>{% for name, item in image_profiles.items() %}{{ name }} | safe={{ item.supports_safe }} | explicit={{ item.supports_explicit }}
+{{ item.description }}
+
+{% endfor %}</pre>
+      </article>
+
+      <article class="card">
+        <h2>模型档案</h2>
+        <pre>{% for name, item in model_profiles.items() %}{{ name }} | {{ item.kind }} | {{ item.provider }}
+{{ item.description }}
+
+{% endfor %}</pre>
+      </article>
+
+      <article class="card">
+        <h2>人格档案</h2>
+        <pre>{% for name, item in personas.items() %}{{ name }} | {{ item.display_name }}
+{{ item.description }}
+
+{% endfor %}</pre>
+      </article>
+
+      <article class="card wide">
+        <h2>可调配置项</h2>
+        <pre>全局配置:
+{% for key, spec in catalog["global"].items() %}- {{ key }}: {{ spec.description }}
+{% endfor %}
+
+服务器配置:
+{% for key, spec in catalog["guild"].items() %}- {{ key }}: {{ spec.description }}
+{% endfor %}</pre>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

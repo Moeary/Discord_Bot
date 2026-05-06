@@ -12,13 +12,14 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
     store = request.app.state.store
     global_settings = await store.get_global_settings()
+    system_prompt = _resolve_system_prompt(request, global_settings)
     user_content: str | list[dict[str, object]] = payload.prompt
     if payload.image_urls:
         user_content = [{"type": "text", "text": payload.prompt}]
         for url in payload.image_urls:
             user_content.append({"type": "image_url", "image_url": {"url": url}})
     messages = [
-        {"role": "system", "content": payload.system_prompt or global_settings.system_prompt},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
     try:
@@ -37,12 +38,13 @@ async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
 async def summary(request: Request, payload: SummaryRequest) -> dict[str, str]:
     store = request.app.state.store
     global_settings = await store.get_global_settings()
+    summary_prompt = _resolve_summary_prompt(request, global_settings)
     text = payload.text or "\n".join(payload.messages)
     if not payload.include_image_hints:
         text = text.replace(" [附带图片/文件]", "")
     try:
         reply = await request.app.state.openrouter.summarize_text(
-            global_settings.summary_system_prompt,
+            summary_prompt,
             text,
             model=payload.model or None,
             profile=payload.profile or global_settings.chat_model_profile,
@@ -57,9 +59,14 @@ async def summary(request: Request, payload: SummaryRequest) -> dict[str, str]:
 async def draw(request: Request, payload: DrawRequest) -> dict[str, object]:
     store = request.app.state.store
     global_settings = await store.get_global_settings()
+    prompt_text = (payload.prompt or "").strip()
+    if not prompt_text and payload.urls:
+        prompt_text = "请基于提供的图片做一次高质量改图，保留主体、角色特征和关键细节。"
+    if not prompt_text:
+        raise HTTPException(status_code=400, detail="prompt 不能为空，除非你同时提供 urls 作为参考图。")
     try:
         result = await request.app.state.openrouter.draw(
-            prompt=payload.prompt,
+            prompt=prompt_text,
             model=payload.model or None,
             profile=payload.profile or global_settings.draw_model_profile,
             fallback_profiles=payload.fallback_profiles or global_settings.draw_fallback_profiles,
@@ -90,3 +97,13 @@ async def draw_result(request: Request, payload: DrawResultRequest) -> dict[str,
 def _describe_error(exc: Exception) -> str:
     text = str(exc).strip()
     return text or exc.__class__.__name__
+
+
+def _resolve_system_prompt(request: Request, global_settings) -> str:
+    persona = request.app.state.personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
+    return str(persona.get("system_prompt", "")).strip()
+
+
+def _resolve_summary_prompt(request: Request, global_settings) -> str:
+    persona = request.app.state.personas.get_persona(getattr(global_settings, "persona_profile", "glados"))
+    return str(persona.get("summary_system_prompt", "")).strip()
