@@ -69,6 +69,8 @@
       <article class="card wide">
         <h2>不用 Slash 也能做什么</h2>
         <pre>@GLaDOS 你好
+@GLaDOS 查一下今天的某个新闻
+@GLaDOS 总结这个链接 https://example.com
 回复 GLaDOS：继续
 @GLaDOS draw 一只猫娘
 回复一张图：@GLaDOS 改图，换成赛博风
@@ -79,6 +81,16 @@
 @GLaDOS 抛硬币
 @GLaDOS 8ball 我今天该不该熬夜
 @GLaDOS 老婆</pre>
+      </article>
+
+      <article class="card wide">
+        <h2>AI 联网预算</h2>
+        <pre>自动搜索只适合需要当前事实的问题；普通聊天不会为了闲聊去搜索。
+抓网页和搜索上下文受全局配置限制：
+ai_web_fetch_limit / ai_web_search_result_limit
+ai_web_context_char_limit / ai_web_fetch_max_bytes / ai_web_fetch_snippet_chars
+
+可用 /config set ai_web_tools_enabled false 关闭全部联网上下文。</pre>
       </article>
 
       <article class="card">

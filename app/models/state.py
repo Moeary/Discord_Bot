@@ -23,6 +23,14 @@ class GlobalSettings(BaseModel):
     draw_fallback_profiles: str = ""
     persona_profile: str = "glados"
     max_chat_history: int = 12
+    ai_web_tools_enabled: bool = True
+    ai_web_fetch_enabled: bool = True
+    ai_web_search_enabled: bool = True
+    ai_web_fetch_limit: int = 3
+    ai_web_search_result_limit: int = 4
+    ai_web_context_char_limit: int = 4500
+    ai_web_fetch_max_bytes: int = 262144
+    ai_web_fetch_snippet_chars: int = 1400
 
 
 class GuildSettings(BaseModel):

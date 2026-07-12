@@ -7,7 +7,7 @@
 ### AI
 
 - `/ai chat`
-  - 和 GLaDOS 聊天，支持带一张图。
+  - 和 GLaDOS 聊天，支持带一张图；贴网页 URL 会自动抓取，明显要求“搜索/最新/当前”时会自动搜索。
 - `/ai summary`
   - 总结当前频道最近聊天。
 - `/ai draw`
@@ -58,6 +58,10 @@
 
 - `@GLaDOS 你好`
   - 直接聊天。
+- `@GLaDOS 查一下今天的某个新闻`
+  - 自动用搜索结果补上下文后回答。
+- `@GLaDOS 总结这个链接 https://example.com`
+  - 自动抓取网页正文后回答。
 - `回复 GLaDOS 继续`
   - 接着上一轮继续聊。
 - `@GLaDOS draw 一只猫娘`
@@ -92,6 +96,12 @@
 - 涩图默认优先用 `explicit_image_site_profile`
 - 用户自己的 `/fun image_source` 和 `/fun image_tags` 会覆盖服务器默认值
 - Rule34 默认只建议用于 `explicit` 模式
+
+## AI 联网预算
+
+- 自动搜索只适合需要当前事实的问题；普通聊天不会为了“今天心情如何”这类话题去搜索。
+- 网页抓取和搜索上下文受全局配置限制：`ai_web_fetch_limit`、`ai_web_search_result_limit`、`ai_web_context_char_limit`、`ai_web_fetch_max_bytes`、`ai_web_fetch_snippet_chars`。
+- 想省 token 或 API 费用时，可用 `/config set ai_web_tools_enabled false` 关闭，或分别关闭 `ai_web_fetch_enabled` / `ai_web_search_enabled`。
 
 ## 维护说明
 

@@ -20,6 +20,7 @@ from app.services.minecraft_bridge import is_valid_minecraft_username
 from app.services.personas import PersonaStore
 from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
+from app.services.web_context import WebContextService
 
 
 LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class EntertainmentBot(commands.Bot):
         image_sources: ImageSourceRouter,
         personas: PersonaStore,
         saucenao: SauceNaoClient,
+        web_context: WebContextService,
     ) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
@@ -74,6 +76,7 @@ class EntertainmentBot(commands.Bot):
         self.image_sources = image_sources
         self.personas = personas
         self.saucenao = saucenao
+        self.web_context = web_context
         self.minecraft_bridge = None
         self._commands_registered = False
         self._synced = False
@@ -141,7 +144,15 @@ class EntertainmentBot(commands.Bot):
                         self._resolve_system_prompt(global_settings),
                         global_settings,
                     ),
-                },
+                }
+            ]
+            messages.extend(
+                await self.web_context.build_context_messages(
+                    prompt,
+                    settings=global_settings,
+                )
+            )
+            messages.append(
                 {
                     "role": "user",
                     "content": self._build_user_multimodal_content(
@@ -150,7 +161,7 @@ class EntertainmentBot(commands.Bot):
                         empty_text_fallback=f"{interaction.user.display_name}: 请结合图片内容回复。",
                     ),
                 },
-            ]
+            )
             try:
                 reply = await self.openrouter.chat(
                     messages,
@@ -812,6 +823,14 @@ class EntertainmentBot(commands.Bot):
                             f"`draw_model_profile`: {global_settings.draw_model_profile}",
                             f"`draw_fallback_profiles`: {global_settings.draw_fallback_profiles or '-'}",
                             f"`max_chat_history`: {global_settings.max_chat_history}",
+                            f"`ai_web_tools_enabled`: {getattr(global_settings, 'ai_web_tools_enabled', True)}",
+                            f"`ai_web_fetch_enabled`: {getattr(global_settings, 'ai_web_fetch_enabled', True)}",
+                            f"`ai_web_search_enabled`: {getattr(global_settings, 'ai_web_search_enabled', True)}",
+                            f"`ai_web_fetch_limit`: {getattr(global_settings, 'ai_web_fetch_limit', 3)}",
+                            f"`ai_web_search_result_limit`: {getattr(global_settings, 'ai_web_search_result_limit', 4)}",
+                            f"`ai_web_context_char_limit`: {getattr(global_settings, 'ai_web_context_char_limit', 4500)}",
+                            f"`ai_web_fetch_max_bytes`: {getattr(global_settings, 'ai_web_fetch_max_bytes', 262144)}",
+                            f"`ai_web_fetch_snippet_chars`: {getattr(global_settings, 'ai_web_fetch_snippet_chars', 1400)}",
                         ]
                     ),
                 ]
@@ -1135,6 +1154,13 @@ class EntertainmentBot(commands.Bot):
                     ),
                 }
             ]
+            messages.extend(
+                await self.web_context.build_context_messages(
+                    prompt,
+                    settings=global_settings,
+                    extra_text=referenced.content if referenced is not None else "",
+                )
+            )
             messages.extend(await self._build_reference_context_messages(message, referenced))
             messages.append(
                 {

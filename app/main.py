@@ -24,6 +24,7 @@ from app.services.minecraft_bridge import MinecraftBridge
 from app.services.personas import PersonaStore
 from app.services.saucenao import SauceNaoClient
 from app.services.state_store import StateStore
+from app.services.web_context import WebContextService
 
 
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +47,7 @@ openrouter = ProfiledAIClient(env)
 image_sources = ImageSourceRouter(env)
 personas = PersonaStore(env)
 saucenao = SauceNaoClient(env)
+web_context = WebContextService(env)
 bot = EntertainmentBot(
     env=env,
     store=store,
@@ -53,6 +55,7 @@ bot = EntertainmentBot(
     image_sources=image_sources,
     personas=personas,
     saucenao=saucenao,
+    web_context=web_context,
 )
 minecraft_bridge = MinecraftBridge(store=store, bot=bot, env=env)
 bot.minecraft_bridge = minecraft_bridge
@@ -160,6 +163,7 @@ app.state.openrouter = openrouter
 app.state.image_sources = image_sources
 app.state.personas = personas
 app.state.saucenao = saucenao
+app.state.web_context = web_context
 app.state.minecraft_bridge = minecraft_bridge
 app.state.bot_manager = bot_manager
 app.state.health_provider = health_handler

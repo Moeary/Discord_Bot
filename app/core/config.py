@@ -36,6 +36,12 @@ class EnvSettings(BaseSettings):
     openrouter_site_url: str | None = Field(default=None, alias="OPENROUTER_SITE_URL")
     openrouter_site_name: str | None = Field(default=None, alias="OPENROUTER_SITE_NAME")
 
+    ai_web_search_provider: str = Field(default="duckduckgo", alias="AI_WEB_SEARCH_PROVIDER")
+    ai_web_search_api_key: str | None = Field(default=None, alias="AI_WEB_SEARCH_API_KEY")
+    ai_web_search_base_url: str | None = Field(default=None, alias="AI_WEB_SEARCH_BASE_URL")
+    brave_search_api_key: str | None = Field(default=None, alias="BRAVE_SEARCH_API_KEY")
+    serper_api_key: str | None = Field(default=None, alias="SERPER_API_KEY")
+
     danbooru_base_url: str = Field(
         default="https://danbooru.donmai.us",
         alias="DANBOORU_BASE_URL",

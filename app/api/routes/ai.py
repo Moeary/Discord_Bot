@@ -20,8 +20,14 @@ async def chat(request: Request, payload: ChatRequest) -> dict[str, str]:
             user_content.append({"type": "image_url", "image_url": {"url": url}})
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
     ]
+    messages.extend(
+        await request.app.state.web_context.build_context_messages(
+            payload.prompt,
+            settings=global_settings,
+        )
+    )
+    messages.append({"role": "user", "content": user_content})
     try:
         reply = await request.app.state.openrouter.chat(
             messages,

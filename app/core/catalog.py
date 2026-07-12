@@ -29,6 +29,38 @@ GLOBAL_SETTING_SPECS = {
         "type": "int",
         "description": "AI 对话带入上下文的最大消息条数。",
     },
+    "ai_web_tools_enabled": {
+        "type": "bool",
+        "description": "AI 对话是否自动接入网页抓取与搜索上下文。",
+    },
+    "ai_web_fetch_enabled": {
+        "type": "bool",
+        "description": "AI 对话是否自动抓取用户消息里的网页 URL。",
+    },
+    "ai_web_search_enabled": {
+        "type": "bool",
+        "description": "AI 对话是否在用户明显要求查询实时/网络信息时自动搜索。",
+    },
+    "ai_web_fetch_limit": {
+        "type": "int",
+        "description": "单次 AI 对话最多自动抓取多少个网页 URL。",
+    },
+    "ai_web_search_result_limit": {
+        "type": "int",
+        "description": "单次 AI 对话最多带入多少条搜索结果。",
+    },
+    "ai_web_context_char_limit": {
+        "type": "int",
+        "description": "单次 AI 对话注入给模型的网页/搜索上下文总字符上限。",
+    },
+    "ai_web_fetch_max_bytes": {
+        "type": "int",
+        "description": "单个网页抓取时最多下载多少字节，避免长文档撑爆上下文和带宽。",
+    },
+    "ai_web_fetch_snippet_chars": {
+        "type": "int",
+        "description": "单个网页抓取后最多保留多少字符正文摘要。",
+    },
 }
 
 
@@ -106,7 +138,7 @@ COMMAND_REFERENCE = [
     {
         "group": "ai",
         "name": "/ai chat",
-        "description": "调用当前聊天档案与人设聊天，支持可选图片输入。",
+        "description": "调用当前聊天档案与人设聊天，支持可选图片输入，并按需自动抓网页/搜索。",
         "permission": "user",
         "entrypoints": ["slash", "@bot", "reply"],
     },

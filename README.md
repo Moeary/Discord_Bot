@@ -7,6 +7,7 @@
 - `AI 对话`
   - Discord 命令：`/ai chat`（支持可选图片）
   - FastAPI 路由：`POST /api/ai/chat`
+  - 对话会按需自动抓取消息中的网页 URL，并在明显需要实时/网络信息时自动使用搜索引擎补上下文
 - `AI 总结对话`
   - Discord 命令：`/ai summary`
   - FastAPI 路由：`POST /api/ai/summary`
@@ -70,6 +71,12 @@ OPENROUTER_API_KEY=你的 OpenRouter key
 OPENROUTER_SITE_URL=
 OPENROUTER_SITE_NAME=
 
+AI_WEB_SEARCH_PROVIDER=duckduckgo
+AI_WEB_SEARCH_API_KEY=可选，通用搜索 key
+AI_WEB_SEARCH_BASE_URL=可选，自定义搜索接口 URL
+BRAVE_SEARCH_API_KEY=可选，AI_WEB_SEARCH_PROVIDER=brave 时使用
+SERPER_API_KEY=可选，AI_WEB_SEARCH_PROVIDER=serper 时使用
+
 CUSTOM_BASE_URL=
 CUSTOM_DRAW_BASE_URL=
 CUSTOM_CHAT_API_KEY=可选的自定义聊天 key
@@ -91,6 +98,7 @@ SAUCENAO_API_KEY=你的 SauceNAO key
 - `data/providers.json` 负责声明“渠道”和“模型档案”，每个档案会绑定 `type / provider / adapter / model`。
 - `data/personas.json` 负责声明“机器人人设档案”，包括 system prompt、summary prompt 和 fun 文案。
 - 聊天目前统一按 `OpenAI 兼容 /chat/completions` 走；绘图目前支持 `grsai_draw_completions` 和 `grsai_draw_nano_banana` 两种适配器。
+- AI 对话的网页工具是模型调用前的轻量上下文注入：用户贴网页链接时自动 fetch；用户明确说“搜索/查一下/最新/当前”等时自动 search。默认走无 key 的 DuckDuckGo HTML，也支持 `AI_WEB_SEARCH_PROVIDER=brave` 或 `serper`。为控制上下文和费用，搜索结果、抓取网页数、单页下载字节数、单页摘要长度和总注入字符数都有全局上限。
 - `state.json` 只负责记录当前选中的 `chat_model_profile / draw_model_profile` 和群设置。
 - 老配置仍然兼容，默认会自动映射到 `legacy-chat / legacy-draw`。
 - `STATE_FILE` 默认是 `data/state.json`，机器人运行后的设置和统计会持久化到这里。
@@ -193,6 +201,7 @@ uvicorn app.main:app --reload
 ### AI
 
 - `/ai chat prompt:<内容> image:<可选图片> profile:<可选档案>`
+  - 自动联网：贴网页 URL 会抓取正文；明显要求搜索、最新、今天、当前等信息时会自动搜索
 - `/ai summary limit:<消息数>`
 - `/ai draw prompt:<可留空> image:<可选图片> profile:<可选档案> model:<可选覆盖> size:<可选> variants:<1|2>`
 
@@ -237,6 +246,14 @@ uvicorn app.main:app --reload
 - `draw_fallback_profiles`
 - `persona_profile`
 - `max_chat_history`
+- `ai_web_tools_enabled`
+- `ai_web_fetch_enabled`
+- `ai_web_search_enabled`
+- `ai_web_fetch_limit`
+- `ai_web_search_result_limit`
+- `ai_web_context_char_limit`
+- `ai_web_fetch_max_bytes`
+- `ai_web_fetch_snippet_chars`
 
 ### 服务器配置
 
