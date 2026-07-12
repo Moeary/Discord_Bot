@@ -781,19 +781,15 @@ class EntertainmentBot(commands.Bot):
             if not guild_settings.minecraft_bridge_enabled:
                 await interaction.response.send_message("Minecraft 互通未启用。", ephemeral=True)
                 return
-            if not guild_settings.minecraft_server_address:
-                await interaction.response.send_message("未配置 Minecraft 服务器地址。", ephemeral=True)
-                return
 
-            await interaction.response.defer()
             bridge = self.minecraft_bridge
             if bridge is None:
-                await interaction.followup.send("Minecraft 桥接服务不可用。")
+                await interaction.response.send_message("Minecraft 桥接服务不可用。", ephemeral=True)
                 return
 
-            result = await bridge.get_online_players(guild_settings.minecraft_server_id, guild_settings)
-            if "error" in result:
-                await interaction.followup.send(f"查询失败：{result['error']}")
+            result = bridge.get_cached_online_players(guild_settings.minecraft_server_id)
+            if not result.get("cached"):
+                await interaction.response.send_message("暂无数据，Paper 服务器可能还未上报。", ephemeral=True)
                 return
 
             online = result.get("online_count", 0)
@@ -801,9 +797,9 @@ class EntertainmentBot(commands.Bot):
             players = result.get("players", [])
             if players:
                 player_list = ", ".join(f"`{p}`" for p in players)
-                await interaction.followup.send(f"👥 在线玩家 ({online}/{max_players}): {player_list}")
+                await interaction.response.send_message(f"👥 在线玩家 ({online}/{max_players}): {player_list}")
             else:
-                await interaction.followup.send(f"👥 在线玩家: {online}/{max_players}")
+                await interaction.response.send_message(f"👥 在线玩家: {online}/{max_players}")
 
         @minecraft_group.command(name="tell", description="给 Minecraft 玩家留言（上线后送达）")
         @app_commands.describe(username="Minecraft 用户名", message="留言内容")

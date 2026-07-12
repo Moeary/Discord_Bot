@@ -13,7 +13,6 @@ from functools import cached_property
 from typing import Deque
 
 import discord
-import httpx
 from fastapi import HTTPException, Request
 
 from app.api.schemas import MinecraftChatEvent, MinecraftPlayerEvent, MinecraftQueuedMessage
@@ -58,6 +57,7 @@ class MinecraftBridge:
         self._queues: dict[str, Deque[MinecraftQueuedMessage]] = defaultdict(lambda: deque(maxlen=300))
         self._rate_windows: dict[str, Deque[float]] = defaultdict(deque)
         self._last_seen: dict[str, dict[str, object]] = {}
+        self._online_players_cache: dict[str, dict[str, object]] = {}
 
     async def verify_plugin_request(
         self,
@@ -153,28 +153,14 @@ class MinecraftBridge:
         )
         return {"accepted": True}
 
-    async def get_online_players(self, server_id: str, settings: GuildSettings) -> dict[str, object]:
-        address = settings.minecraft_server_address
-        if not address:
-            return {"error": "minecraft_server_address not configured"}
-        if "://" not in address:
-            address = f"http://{address}"
+    async def update_online_players_cache(self, server_id: str, data: dict[str, object]) -> None:
+        self._online_players_cache[server_id] = data
 
-        url = f"{address}/api/players"
-        headers = {}
-        token = settings.minecraft_token.strip()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-            headers["X-DC-Bot-Token"] = token
-
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    return resp.json()
-                return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
-        except Exception as exc:
-            return {"error": f"{type(exc).__name__}: {exc}"}
+    def get_cached_online_players(self, server_id: str) -> dict[str, object]:
+        cached = self._online_players_cache.get(server_id)
+        if cached is None:
+            return {"server_id": server_id, "online_count": 0, "max_players": 0, "players": [], "cached": False}
+        return {**cached, "cached": True}
 
     async def add_pending_tell(
         self,

@@ -62,14 +62,19 @@ async def get_minecraft_server_status(request: Request, server_id: str) -> dict[
     }
 
 
+@router.post("/servers/{server_id}/players")
+async def report_online_players(request: Request, server_id: str) -> dict[str, object]:
+    bridge = request.app.state.minecraft_bridge
+    await bridge.verify_plugin_request(request, server_id, action="players_report")
+    body = await request.json()
+    await bridge.update_online_players_cache(server_id, body)
+    return {"ok": True}
+
+
 @router.get("/servers/{server_id}/players")
 async def get_online_players(request: Request, server_id: str) -> dict[str, object]:
     bridge = request.app.state.minecraft_bridge
-    config = await bridge.get_guild_config(server_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="没有启用这个 Minecraft server_id 的服务器配置。")
-    result = await bridge.get_online_players(server_id, config.settings)
-    return result
+    return bridge.get_cached_online_players(server_id)
 
 
 @router.get("/bindings/{guild_id}")

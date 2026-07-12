@@ -1,9 +1,6 @@
 package com.dcbot.paperbridge;
 
 import com.google.gson.Gson;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -19,8 +16,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.IOException;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -43,16 +38,16 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
 
     private HttpClient httpClient;
     private BukkitTask pollTask;
-    private HttpServer httpServer;
+    private BukkitTask playersReportTask;
     private boolean bridgeEnabled;
     private String apiBaseUrl;
     private String serverId;
     private String token;
     private String messageFormat;
     private int pollIntervalTicks;
+    private int playersReportIntervalTicks;
     private int requestTimeoutMs;
     private int maxMessageLength;
-    private int httpPort;
     private int lastMessageId;
     private boolean firstPoll = true;
     private volatile String lastError = "";
@@ -67,7 +62,6 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
         loadBridgeConfig();
         Bukkit.getPluginManager().registerEvents(this, this);
         startPoller();
-        startHttpServer();
         if (bridgeEnabled) {
             getLogger().info("DC Bot Paper bridge enabled for server-id=" + serverId + ", api=" + apiBaseUrl);
         } else {
@@ -81,9 +75,9 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
             pollTask.cancel();
             pollTask = null;
         }
-        if (httpServer != null) {
-            httpServer.stop(0);
-            httpServer = null;
+        if (playersReportTask != null) {
+            playersReportTask.cancel();
+            playersReportTask = null;
         }
     }
 
@@ -177,7 +171,8 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
                     + ", server-id=" + serverId
                     + ", api=" + apiBaseUrl
                     + ", token=" + (!token.isBlank())
-                    + ", httpPort=" + httpPort
+                    + ", pollInterval=" + pollIntervalTicks + "t"
+                    + ", playersReportInterval=" + playersReportIntervalTicks + "t"
                     + ", lastPoll=" + lastPoll
                     + ", lastMessageId=" + lastMessageId
                     + ", firstPoll=" + firstPoll
@@ -188,7 +183,6 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
             reloadConfig();
             loadBridgeConfig();
             startPoller();
-            startHttpServer();
             sender.sendMessage("DC Bot bridge config reloaded.");
             return true;
         }
@@ -221,10 +215,10 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
         token = getConfig().getString("token", "").trim();
         messageFormat = getConfig().getString("minecraft-message-format", "<%username%> %message%");
         pollIntervalTicks = Math.max(5, getConfig().getInt("poll-interval-ticks", 20));
+        playersReportIntervalTicks = Math.max(100, getConfig().getInt("players-report-interval-ticks", 600));
         int connectTimeoutMs = Math.max(500, getConfig().getInt("connect-timeout-ms", 3000));
         requestTimeoutMs = Math.max(500, getConfig().getInt("request-timeout-ms", 5000));
         maxMessageLength = Math.max(1, Math.min(500, getConfig().getInt("max-message-length", 300)));
-        httpPort = Math.max(0, getConfig().getInt("http-port", 25580));
         httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofMillis(connectTimeoutMs))
@@ -238,12 +232,22 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
             pollTask.cancel();
             pollTask = null;
         }
+        if (playersReportTask != null) {
+            playersReportTask.cancel();
+            playersReportTask = null;
+        }
         if (!bridgeEnabled) return;
         pollTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
                 this::pollDiscordMessages,
                 pollIntervalTicks,
                 pollIntervalTicks
+        );
+        playersReportTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
+                this,
+                this::reportOnlinePlayers,
+                playersReportIntervalTicks,
+                playersReportIntervalTicks
         );
     }
 
@@ -277,6 +281,36 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
                 rememberError("chat post failed: " + ex.getClass().getSimpleName() + ": " + ex.getMessage());
             }
         });
+    }
+
+    private void reportOnlinePlayers() {
+        if (!bridgeEnabled) return;
+        List<String> playerNames = new ArrayList<>();
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            playerNames.add(p.getName());
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("server_id", serverId);
+        payload.put("online_count", playerNames.size());
+        payload.put("max_players", Bukkit.getMaxPlayers());
+        payload.put("players", playerNames);
+
+        HttpRequest request = authed(HttpRequest.newBuilder(endpoint("/api/minecraft/servers/"
+                + URLEncoder.encode(serverId, StandardCharsets.UTF_8) + "/players")))
+                .version(HttpClient.Version.HTTP_1_1)
+                .timeout(Duration.ofMillis(requestTimeoutMs))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload), StandardCharsets.UTF_8))
+                .build();
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() / 100 != 2) {
+                getLogger().warning("player report failed: HTTP " + response.statusCode());
+            }
+        } catch (IOException | InterruptedException ex) {
+            if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
+            // silent — don't spam logs for periodic report
+        }
     }
 
     private void pollDiscordMessages() {
@@ -340,64 +374,6 @@ public final class DcBotPaperBridgePlugin extends JavaPlugin implements Listener
                 .replace("%discord_user_id%", safeText(message.discord_user_id))
                 .replace("%message%", content);
         Bukkit.getScheduler().runTask(this, () -> Bukkit.broadcast(Component.text(line)));
-    }
-
-    // --- Embedded HTTP server ---
-
-    private void startHttpServer() {
-        if (httpServer != null) {
-            httpServer.stop(0);
-            httpServer = null;
-        }
-        if (!bridgeEnabled || httpPort <= 0) return;
-        try {
-            httpServer = HttpServer.create(new InetSocketAddress(httpPort), 0);
-            httpServer.createContext("/api/players", new PlayersHandler());
-            httpServer.setExecutor(null);
-            httpServer.start();
-            getLogger().info("Bridge HTTP server started on port " + httpPort);
-        } catch (IOException ex) {
-            getLogger().warning("Failed to start HTTP server on port " + httpPort + ": " + ex.getMessage());
-        }
-    }
-
-    private class PlayersHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            // Verify token
-            String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
-            String xToken = exchange.getRequestHeaders().getFirst("X-DC-Bot-Token");
-            String providedToken = null;
-            if (authHeader != null && authHeader.toLowerCase().startsWith("bearer ")) {
-                providedToken = authHeader.substring(7).trim();
-            } else if (xToken != null) {
-                providedToken = xToken.trim();
-            }
-            if (!token.isBlank() && (providedToken == null || !providedToken.equals(token))) {
-                sendJson(exchange, 401, "{\"error\":\"invalid token\"}");
-                return;
-            }
-
-            List<String> playerNames = new ArrayList<>();
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                playerNames.add(p.getName());
-            }
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("server_id", serverId);
-            result.put("online_count", playerNames.size());
-            result.put("max_players", Bukkit.getMaxPlayers());
-            result.put("players", playerNames);
-            sendJson(exchange, 200, gson.toJson(result));
-        }
-    }
-
-    private void sendJson(HttpExchange exchange, int statusCode, String json) throws IOException {
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
-        exchange.sendResponseHeaders(statusCode, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
     }
 
     // --- Utilities ---
