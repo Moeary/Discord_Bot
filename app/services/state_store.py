@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from app.models.state import AppState, GuildSettings, GuildStats, TaxCase, UserImagePreferences, UserStats, utcnow
+from app.models.state import AppState, GuildSettings, GuildStats, MinecraftTell, TaxCase, UserImagePreferences, UserStats, utcnow
 
 
 class StateStore:
@@ -153,6 +153,47 @@ class StateStore:
                 self._state.minecraft_bindings.pop(str(guild_id), None)
             await self._save_unlocked()
             return True
+
+    async def add_pending_tell(
+        self,
+        server_id: str,
+        target_player: str,
+        from_user: str,
+        message: str,
+    ) -> MinecraftTell:
+        await self.load()
+        async with self._lock:
+            server_tells = self._state.minecraft_pending_tells.setdefault(server_id, {})
+            player_tells = server_tells.setdefault(target_player, [])
+            tell_id = max((t.id for t in player_tells), default=0) + 1
+            tell = MinecraftTell(id=tell_id, from_user=from_user, message=message)
+            player_tells.append(tell)
+            await self._save_unlocked()
+            return tell.model_copy(deep=True)
+
+    async def get_pending_tells(self, server_id: str, player_name: str) -> list[MinecraftTell]:
+        await self.load()
+        async with self._lock:
+            server_tells = self._state.minecraft_pending_tells.get(server_id, {})
+            player_tells = server_tells.get(player_name, [])
+            return [t.model_copy(deep=True) for t in player_tells]
+
+    async def clear_pending_tells(self, server_id: str, player_name: str) -> list[MinecraftTell]:
+        await self.load()
+        async with self._lock:
+            server_tells = self._state.minecraft_pending_tells.get(server_id, {})
+            player_tells = server_tells.pop(player_name, [])
+            if not server_tells:
+                self._state.minecraft_pending_tells.pop(server_id, None)
+            if player_tells:
+                await self._save_unlocked()
+            return [t.model_copy(deep=True) for t in player_tells]
+
+    async def list_pending_tell_players(self, server_id: str) -> dict[str, int]:
+        await self.load()
+        async with self._lock:
+            server_tells = self._state.minecraft_pending_tells.get(server_id, {})
+            return {name: len(tells) for name, tells in server_tells.items()}
 
     async def add_tax_case(self, tax_case: TaxCase) -> TaxCase:
         await self.load()

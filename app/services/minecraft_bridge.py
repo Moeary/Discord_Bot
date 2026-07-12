@@ -13,11 +13,12 @@ from functools import cached_property
 from typing import Deque
 
 import discord
+import httpx
 from fastapi import HTTPException, Request
 
-from app.api.schemas import MinecraftChatEvent, MinecraftQueuedMessage
+from app.api.schemas import MinecraftChatEvent, MinecraftPlayerEvent, MinecraftQueuedMessage
 from app.core.config import EnvSettings
-from app.models.state import GuildSettings
+from app.models.state import GuildSettings, MinecraftTell
 from app.services.state_store import StateStore
 
 
@@ -116,6 +117,82 @@ class MinecraftBridge:
             "queued_messages": len(queue or ()),
             "latest_message_id": latest_id,
         }
+
+    async def publish_player_event(
+        self,
+        config: MinecraftGuildConfig,
+        event: MinecraftPlayerEvent,
+    ) -> dict[str, object]:
+        if not config.settings.minecraft_channel_id:
+            return {"accepted": False, "reason": "minecraft_channel_id_not_configured"}
+        if not self.bot.is_ready():
+            return {"accepted": False, "reason": "discord_bot_not_ready"}
+
+        channel = self.bot.get_channel(config.settings.minecraft_channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(config.settings.minecraft_channel_id)
+            except discord.HTTPException:
+                channel = None
+        if not isinstance(channel, discord.abc.Messageable):
+            return {"accepted": False, "reason": "discord_channel_not_found"}
+
+        player_name = sanitize_minecraft_username(event.player_name, event.player_uuid)
+        if event.event_type == "join":
+            emoji = "📥"
+            action = "加入了服务器"
+        elif event.event_type == "quit":
+            emoji = "📤"
+            action = "离开了服务器"
+        else:
+            return {"accepted": False, "reason": "unknown_event_type"}
+
+        await channel.send(
+            f"{emoji} **{discord.utils.escape_markdown(player_name)}** {action}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        return {"accepted": True}
+
+    async def get_online_players(self, server_id: str, settings: GuildSettings) -> dict[str, object]:
+        address = settings.minecraft_server_address
+        if not address:
+            return {"error": "minecraft_server_address not configured"}
+        if "://" not in address:
+            address = f"http://{address}"
+
+        url = f"{address}/api/players"
+        headers = {}
+        token = settings.minecraft_token.strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            headers["X-DC-Bot-Token"] = token
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    async def add_pending_tell(
+        self,
+        server_id: str,
+        target_player: str,
+        from_user: str,
+        message: str,
+    ) -> MinecraftTell:
+        return await self.store.add_pending_tell(server_id, target_player, from_user, message)
+
+    async def get_pending_tells(self, server_id: str, player_name: str) -> list[MinecraftTell]:
+        return await self.store.get_pending_tells(server_id, player_name)
+
+    async def clear_pending_tells(self, server_id: str, player_name: str) -> list[MinecraftTell]:
+        return await self.store.clear_pending_tells(server_id, player_name)
+
+    async def list_pending_tell_players(self, server_id: str) -> dict[str, int]:
+        return await self.store.list_pending_tell_players(server_id)
 
     def _settings_from_env(self) -> GuildSettings:
         return GuildSettings(

@@ -773,6 +773,76 @@ class EntertainmentBot(commands.Bot):
             )
             await interaction.response.send_message(text, ephemeral=True)
 
+        @minecraft_group.command(name="online", description="查看 Minecraft 服务器在线玩家")
+        async def minecraft_online(interaction: discord.Interaction) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.minecraft_bridge_enabled:
+                await interaction.response.send_message("Minecraft 互通未启用。", ephemeral=True)
+                return
+            if not guild_settings.minecraft_server_address:
+                await interaction.response.send_message("未配置 Minecraft 服务器地址。", ephemeral=True)
+                return
+
+            await interaction.response.defer()
+            bridge = self.minecraft_bridge
+            if bridge is None:
+                await interaction.followup.send("Minecraft 桥接服务不可用。")
+                return
+
+            result = await bridge.get_online_players(guild_settings.minecraft_server_id, guild_settings)
+            if "error" in result:
+                await interaction.followup.send(f"查询失败：{result['error']}")
+                return
+
+            online = result.get("online_count", 0)
+            max_players = result.get("max_players", "?")
+            players = result.get("players", [])
+            if players:
+                player_list = ", ".join(f"`{p}`" for p in players)
+                await interaction.followup.send(f"👥 在线玩家 ({online}/{max_players}): {player_list}")
+            else:
+                await interaction.followup.send(f"👥 在线玩家: {online}/{max_players}")
+
+        @minecraft_group.command(name="tell", description="给 Minecraft 玩家留言（上线后送达）")
+        @app_commands.describe(username="Minecraft 用户名", message="留言内容")
+        async def minecraft_tell(interaction: discord.Interaction, username: str, message: str) -> None:
+            guild_settings = await self._require_guild_settings(interaction)
+            if guild_settings is None:
+                return
+            if not guild_settings.minecraft_bridge_enabled:
+                await interaction.response.send_message("Minecraft 互通未启用。", ephemeral=True)
+                return
+
+            username = username.strip()
+            if not is_valid_minecraft_username(username):
+                await interaction.response.send_message("Minecraft 用户名必须是 3-16 位字母、数字或下划线。", ephemeral=True)
+                return
+            message = message.strip()
+            if not message:
+                await interaction.response.send_message("留言内容不能为空。", ephemeral=True)
+                return
+            if len(message) > 500:
+                await interaction.response.send_message("留言内容不能超过 500 字。", ephemeral=True)
+                return
+
+            bridge = self.minecraft_bridge
+            if bridge is None:
+                await interaction.response.send_message("Minecraft 桥接服务不可用。", ephemeral=True)
+                return
+
+            tell = await bridge.add_pending_tell(
+                guild_settings.minecraft_server_id,
+                username,
+                interaction.user.display_name,
+                message,
+            )
+            await interaction.response.send_message(
+                f"已记录留言给 `{username}`，将在下次上线时送达。",
+                ephemeral=True,
+            )
+
         @config_group.command(name="view", description="查看当前服务器与全局配置")
         async def config_view(interaction: discord.Interaction) -> None:
             guild_settings = await self._require_guild_settings(interaction)

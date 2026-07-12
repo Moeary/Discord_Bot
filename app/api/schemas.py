@@ -86,3 +86,46 @@ class MinecraftBindingRequest(BaseModel):
     @classmethod
     def trim_username(cls, value):
         return str(value).strip()
+
+
+class MinecraftPlayerEvent(BaseModel):
+    server_id: str = Field(default="default", max_length=64)
+    event_type: str = Field(max_length=16)  # "join" or "quit"
+    player_name: str = Field(max_length=16)
+    player_uuid: str = Field(max_length=64)
+
+    @field_validator("server_id", "event_type", "player_name", "player_uuid", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        if value is None:
+            return None
+        return str(value).strip()
+
+
+class MinecraftTellRequest(BaseModel):
+    target_player: str = Field(max_length=16)
+    message: str = Field(max_length=500)
+
+    @field_validator("target_player", "message", mode="before")
+    @classmethod
+    def trim_text(cls, value):
+        return str(value).strip()
+
+
+class MinecraftPendingTell(BaseModel):
+    id: int
+    from_user: str
+    message: str
+    created_at: str
+
+
+class MinecraftPendingTellsResponse(BaseModel):
+    player_name: str
+    tells: list[MinecraftPendingTell] = Field(default_factory=list)
+
+
+class MinecraftOnlinePlayersResponse(BaseModel):
+    server_id: str
+    online_count: int
+    max_players: int
+    players: list[str] = Field(default_factory=list)

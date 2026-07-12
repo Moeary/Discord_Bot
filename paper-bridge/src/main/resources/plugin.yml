@@ -3,7 +3,7 @@ version: ${version}
 main: com.dcbot.paperbridge.DcBotPaperBridgePlugin
 api-version: '1.21'
 author: DC Bot
-description: Bridge Paper chat with the DC Bot FastAPI service.
+description: Bridge Paper chat, player events, and online status with the DC Bot FastAPI service.
 commands:
   dcbotbridge:
     description: Manage the DC Bot Paper bridge.

@@ -1,10 +1,19 @@
 # DC Bot Paper Bridge
 
-This Paper plugin bridges chat between a Paper server and the DC Bot FastAPI app.
+This Paper plugin bridges chat, player events, and online status between a Paper server and the DC Bot FastAPI app.
+
+## Features
+
+- **Chat bridge**: MC chat ↔ Discord channel (双向)
+- **Player events**: join/quit → Discord 通知
+- **Online players**: HTTP endpoint for DC to query current online players
+- **Offline tells**: DC users can leave messages for MC players, delivered on join
+- **No history replay**: only messages sent after server start are broadcast
 
 ## Build
 
 ```powershell
+$env:JAVA_HOME = "D:\Apps\Dev\JDK22"
 .\gradlew.bat build
 ```
 
@@ -26,6 +35,7 @@ Important values:
 - `api-base-url`: FastAPI base URL, usually `http://127.0.0.1:8000`.
 - `server-id`: must match `minecraft_server_id` in the DC Bot guild settings.
 - `token`: optional. If empty, FastAPI only accepts local/private network clients when `minecraft_allow_no_token` is enabled.
+- `http-port`: port for the embedded HTTP server that serves `/api/players`. Set to `0` to disable. Default: `25580`.
 
 The Minecraft server can generate the shared secret with:
 
@@ -41,10 +51,18 @@ Set these for the Discord guild:
 
 - `minecraft_bridge_enabled=true`
 - `minecraft_server_id=default`
-- `minecraft_server_address=127.0.0.1:30001`
+- `minecraft_server_address=127.0.0.1:25580` (Paper plugin HTTP port)
 - `minecraft_channel_id=<Discord text channel id, not guild/server id>`
 - `minecraft_token=<same token as plugin, optional>`
 - `minecraft_allow_no_token=true` for local/private no-token testing
 - `MINECRAFT_ALLOWED_CLIENTS=<Paper server IP or CIDR>` when exposing FastAPI beyond localhost
 
 Users can bind identity with `/minecraft bind <username>`.
+
+## DC Bot Commands
+
+- `/minecraft bind <username>` — bind your Minecraft username
+- `/minecraft unbind` — unbind
+- `/minecraft status` — view bridge status and your binding
+- `/minecraft online` — query current online players on the MC server
+- `/minecraft tell <username> <message>` — leave a message for an offline player (delivered on join)

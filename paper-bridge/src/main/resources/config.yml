@@ -7,3 +7,4 @@ connect-timeout-ms: 3000
 request-timeout-ms: 5000
 max-message-length: 300
 minecraft-message-format: "<%username%> %message%"
+http-port: 25580

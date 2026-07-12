@@ -106,10 +106,18 @@ class TaxCase(BaseModel):
     completed_at: datetime | None = None
 
 
+class MinecraftTell(BaseModel):
+    id: int
+    from_user: str
+    message: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class AppState(BaseModel):
     global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
     guilds: dict[str, GuildSettings] = Field(default_factory=dict)
     stats: dict[str, GuildStats] = Field(default_factory=dict)
     user_preferences: dict[str, dict[str, UserImagePreferences]] = Field(default_factory=dict)
     minecraft_bindings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    minecraft_pending_tells: dict[str, dict[str, list[MinecraftTell]]] = Field(default_factory=dict)
     tax_cases: list[TaxCase] = Field(default_factory=list)
